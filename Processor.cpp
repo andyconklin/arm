@@ -9,7 +9,6 @@ namespace {
 		DWORD ans = (imm >> rot) | (imm << ((~rot + 1) & 0x1F));
 		return ans;
 	}
-
 	DWORD inline popcnt(DWORD i) {
 		i = i - ((i >> 1) & 0x55555555);
 		i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
@@ -382,377 +381,396 @@ skip:
 	return 0;
 }
 int Processor::thumb_step() {
+	/* Delegate the instruction to whichever encoding it belongs to */
 	WORD instr = mem->get_u16(r[15]);
-	if ((instr & 0xF000) == 0x9000) {
-		/* Load/store to/from stack */
-		DWORD L = (instr & 0x0800) >> 11;
-		DWORD Rd = (instr & 0x0700) >> 8;
-		DWORD immed_8 = (instr & 0x00FF);
-		if (L) {
-			DWORD address = r[13] + (immed_8 * 4);
-			r[Rd] = mem->get_u32(address);
-			if (Rd == 15) r[Rd] -= 2; // can't even be this tbh
-		}
-		else {
-			DWORD address = r[13] + (immed_8 * 4);
-			DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd]; // can't even be this tbh
-			mem->set_u32(address, d);
+	DWORD f = 0xFAFA;
+	for (DWORD i = 0; i < 23; i++) {
+		if (filters[i].first(instr)) {
+			if (f == 0xFAFA) f = i;
+			else throw "Ambiguous thumb instruction reached!";
 		}
 	}
-	else if ((instr & 0xF000) == 0xB000) {
-		/* Miscellaneous instruction */
-		if ((instr & 0x0600) == 0x0400) {
-			/* Push/pop register list */
-			DWORD L = (instr & 0x0800) >> 11;
-			DWORD R = (instr & 0x0100) >> 8;
-			DWORD register_list = (instr & 0x00FF);
-			if (L == 0) { /* PUSH */
-				DWORD start_address = r[13] - 4 * (R + popcnt(register_list));
-				DWORD end_address = r[13] - 4;
-				DWORD address = start_address;
-				for (DWORD i = 0; i < 8; i++) {
-					if (register_list & (1 << i)) {
-						std::cout << "Setting mem[" << address << "] = " << r[i] << std::endl;
-						mem->set_u32(address, r[i]);
-						address += 4;
-					}
-				}
-				if (R) {
-					std::cout << "Setting mem[" << address << "] = " << r[14] << std::endl;
-					mem->set_u32(address, r[14]);
-					address += 4;
-				}
-				if (end_address != address - 4) {
-					std::cout << "WHATHT HTH" << std::endl;
-					goto skip;
-				}
-				r[13] = r[13] - 4 * (R + popcnt(register_list));
-			}
-			else { /* POP */
-				DWORD start_address = r[13];
-				DWORD end_address = r[13] + 4 * (R + popcnt(register_list));
-				DWORD address = start_address;
-
-				for (DWORD i = 0; i < 8; i++) {
-					if (register_list & (1 << i)) {
-						std::cout << "Setting r[" << i << "] = mem[" << address << "] = ";
-						r[i] = mem->get_u32(address);
-						std::cout << r[i] << std::endl;
-						address += 4;
-					}
-				}
-
-				if (R) {
-					DWORD value = mem->get_u32(address);
-					r[15] = value & 0xFFFFFFFE;
-					set_t_bit(value & 1);
-					address += 4;
-					r[15] -= 2;
-				}
-
-				if (end_address != address) {
-					std::cout << "ASRMFJgH LFLFWf" << std::endl;
-					goto skip;
-				}
-
-				r[13] = end_address;
-			}
-		}
-		else if ((instr & 0xFF00) == 0xB000) {
-			/* Adjust stack pointer */
-			DWORD immed_7 = instr & 0x007F;
-			if (instr & 0x0080) { /* SUB (4) */
-				r[13] -= (immed_7 << 2);
-			}
-			else { /* ADD (7) */
-				r[13] += (immed_7 << 2);
-			}
-		}
-		else {
-			std::cout << "Maldita sea" << std::endl;
-			goto skip;
-		}
-	}
-	else if ((instr & 0xFC00) == 0x4400 && (instr & 0x0300) != 0x0300) {
-		/* Special data processing: MOV (3) | ADD | CMP | CPY */
-		DWORD opcode = (instr & 0x0300) >> 8;
-		DWORD H1 = (instr & 0x0080) >> 7;
-		DWORD H2 = (instr & 0x0040) >> 6;
+	if (f == 0xFAFA)
+		throw "Unrecognized thumb instruction!";
+	BOOL ret = (this->*(this->filters[f].second))(instr);
+	if (!ret)
+		throw "An instruction function returned false.";
+	r[15] += 2;
+	return ret;
+}
+BOOL Processor::shift_by_immediate(DWORD instr) { 
+	if ((instr & 0x1800) == 0x0000) { /* LSL (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
 		DWORD Rm = (instr & 0x0038) >> 3;
-		DWORD Rdn = (instr & 0x0007);
-		if (opcode == 2) { /* MOV (3) */
-			r[Rdn | (H1 << 3)] = r[Rm | (H2 << 3)];
+		DWORD Rd = (instr & 0x0007);
+		if (immed_5) {
+			set_c_flag(r[Rm] & (1 << (32 - immed_5)));
+			DWORD m = r[Rm];
+			if (Rm == 15) m += 4;
+			r[Rd] = m << immed_5;
 		}
 		else {
-			std::cout << "Special opcode not supported" << std::endl;
-			goto skip;
-		}
-	}
-	else if ((instr & 0xFF00) == 0x4700) {
-		/* Branch/exchange instruction set */
-		DWORD L = (instr & 0x0080) >> 7;
-		DWORD Rm = (instr & 0x0078) >> 3;
-		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
-		set_t_bit(m & 1);
-		r[15] = m & ~1;
-		r[15] -= 2;
-	}
-	else if ((instr & 0xF800) == 0x4800) {
-		/* Load from literal pool: LDR(3) */
-		DWORD Rd = (instr & 0x0700) >> 8;
-		DWORD immed_8 = (instr & 0x00FF);
-		DWORD address = ((r[15] + 4) & 0xFFFFFFFC) + (immed_8 * 4);
-		r[Rd] = mem->get_u32(address);
-		if (Rd == 15) r[Rd] -= 2;
-	}
-	else if ((instr & 0xE000) == 0x6000) {
-		/* Load/store word/byte immediate offset */
-		if ((instr & 0xF800) == 0x6800) { /* LDR (1) */
-			DWORD immed_5 = (instr & 0x07C0) >> 6;
-			DWORD Rn = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD address = r[Rn] + (immed_5 * 4);
-			if (Rn == 15) address += 4;
-			r[Rd] = mem->get_u32(address);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if ((instr & 0xF800) == 0x6000) { /* STR (1) */
-			DWORD immed_5 = (instr & 0x07C0) >> 6;
-			DWORD Rn = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD address = r[Rn] + (immed_5 * 4);
-			if (Rn == 15) address += 4;
-			DWORD data_to_store = r[Rd];
-			if (Rd == 15) data_to_store += 4;
-			mem->set_u32(address, data_to_store);
-		}
-		else {
-			std::cout << "This load or store instruction is not yet implemented." << std::endl;
-			goto skip;
-		}
-	}
-	else if ((instr & 0xE000) == 0x0000 && (instr & 0x1800) != 0x1800) {
-		/* Shift by immediate */
-		if ((instr & 0x1800) == 0x0000) { /* LSL (1) */
-			DWORD immed_5 = (instr & 0x07C0) >> 6;
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			if (immed_5) {
-				set_c_flag(r[Rm] & (1 << (32 - immed_5)));
-				DWORD m = r[Rm];
-				if (Rm == 15) m += 4;
-				r[Rd] = m << immed_5;
-			}
-			else {
-				r[Rd] = r[Rm];
-				if (Rm == 15) r[Rd] += 4;
-			}
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if ((instr & 0x1800) == 0x0800) { /* LSR (1) */
-			DWORD immed_5 = (instr & 0x07C0) >> 6;
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
-			if (immed_5) {
-				set_c_flag(m & (1 << (immed_5 - 1)));
-				r[Rd] = m >> immed_5;
-			}
-			else {
-				set_c_flag(m & 0x80000000);
-				r[Rd] = 0;
-			}
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else {
-			std::cout << "Unimplemented shift by immediate instruction." << std::endl;
-			goto skip;
-		}
-	}
-	else if ((instr & 0xFC00) == 0x1800) {
-		// It's not possible for PC to be referenced here!
-		// So no Rd == 15? etc. needed!!!
-		DWORD Rm = (instr & 0x01C0) >> 6;
-		DWORD Rn = (instr & 0x38) >> 3;
-		DWORD Rd = (instr & 0x7);
-		/* Add/subtract register */
-		if ((instr & 0x0200) == 0) { /* ADD (3) */
-			r[Rd] = r[Rn] + r[Rm];
-		}
-		else { /* SUB (3) */
-			r[Rd] = r[Rn] - r[Rm];
+			r[Rd] = r[Rm];
+			if (Rm == 15) r[Rd] += 4;
 		}
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		// TODO set C and V flags!!!
+		if (Rd == 15) r[Rd] -= 2;
 	}
-	else if ((instr & 0xFC00) == 0x1C00) {
-		/* Add/subtract immediate */
-		if ((instr & 0x0200) == 0) { /* ADD (1) */
-			DWORD immed_3 = (instr & 0x01C0) >> 6;
-			DWORD Rn = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
-			r[Rd] = n + immed_3;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			// TODO figure out C and V flags... CarryFrom and OverflowFrom
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else { /* SUB (1) */
-			DWORD immed_3 = (instr & 0x01C0) >> 6;
-			DWORD Rn = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
-			r[Rd] = n - immed_3;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			// TODO figure out C and V flags... CarryFrom and OverflowFrom
-			if (Rd == 15) r[Rd] -= 2;
-		}
-	}
-	else if ((instr & 0xFC00) == 0x4000) {
-		/* Data processing register */
-		DWORD op_5 = (instr & 0x03C0) >> 6;
-		if (op_5 == 0) { /* AND */
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rd = instr & 0x0007;
-			DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
-			DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
-			r[Rd] = d & m;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if (op_5 == 0xC) { /* ORR */
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rd = instr & 0x0007;
-			DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
-			DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
-			r[Rd] = d | m;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if (op_5 == 0xD) { /* MUL */
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rd = (instr & 0x0007);
-			DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
-			DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
-			r[Rd] = d * m;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if (op_5 == 0xA) { /* CMP */
-			DWORD Rm = (instr & 0x0038) >> 3;
-			DWORD Rn = (instr & 0x0007);
-			DWORD alu_out = r[Rn] - r[Rm];
-			set_n_flag(alu_out & 0x80000000);
-			set_z_flag(!alu_out);
-			set_c_flag(r[Rn] >= r[Rm]);
-			// TODO set V flag!!! OVERFLOW???
+	else if ((instr & 0x1800) == 0x0800) { /* LSR (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		if (immed_5) {
+			set_c_flag(m & (1 << (immed_5 - 1)));
+			r[Rd] = m >> immed_5;
 		}
 		else {
-			std::cout << "Unimplemented data processing register instruction." << std::endl;
-			goto skip;
+			set_c_flag(m & 0x80000000);
+			r[Rd] = 0;
 		}
-	}
-	else if ((instr & 0xF800) == 0xF000) {
-		/* BL/BLX prefix */
-		DWORD offset_11 = instr & 0x07FF;
-		if (offset_11 & 0x0400) {
-			offset_11 |= (~0x0400 + 1);
-		}
-		r[14] = r[15] + 4 + (offset_11 << 12);
-	}
-	else if ((instr & 0xF800) == 0xF800) {
-		/* BL suffix */
-		DWORD offset_11 = instr & 0x07FF;
-		DWORD address_of_next_instruction = r[15] + 2;
-		r[15] = r[14] + (offset_11 << 1) - 2;
-		r[14] = address_of_next_instruction | 1;
-	}
-	else if ((instr & 0xE000) == 0x2000) {
-		/* Add/subtract/compare/move immediate */
-		DWORD opcode = (instr & 0x1800) >> 11;
-		if (opcode == 0) {
-			/* MOV (1) */
-			DWORD Rd = (instr & 0x0700) >> 8;
-			DWORD immed_8 = (instr & 0x00FF);
-			r[Rd] = immed_8;
-			set_n_flag(FALSE);
-			set_z_flag(!r[Rd]);
-			if (Rd == 15) r[Rd] -= 2;
-		}
-		else if (opcode == 1) {
-			/* CMP (1) */
-			DWORD Rn = (instr & 0x0700) >> 8;
-			DWORD immed_8 = (instr & 0x00FF);
-			DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
-			DWORD alu_out = n - immed_8;
-			set_n_flag(alu_out & 0x80000000);
-			set_z_flag(!alu_out);
-			set_c_flag(n >= immed_8);
-			// TODO set V flag = OverflowFrom(Rn - immed_8)
-		}
-		else if (opcode == 2) {
-			/* ADD (2) */
-			DWORD Rd = (instr & 0x0700) >> 8;
-			DWORD immed_8 = (instr & 0x00FF);
-			r[Rd] = r[Rd] + immed_8;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			set_c_flag(r[Rd] >= immed_8);
-			// SET V FLAG TODO
-		}
-		else if (opcode == 3) {
-			/* SUB (2) */
-			DWORD Rd = (instr & 0x0700) >> 8;
-			DWORD immed_8 = (instr & 0x00FF);
-			r[Rd] = r[Rd] - immed_8;
-			set_n_flag(r[Rd] & 0x80000000);
-			set_z_flag(!r[Rd]);
-			set_c_flag(r[Rd] >= immed_8);
-			// SET V FLAG TODO
-		}
-		else {
-			std::cout << "This add/subtract/compare/move immediate instruction is not yet implemented." << std::endl;
-			goto skip;
-		}
-	}
-	else if ((instr & 0xF000) == 0xD000 && (instr & 0x0F00) != 0x0E00 && (instr & 0x0F00) != 0x0F00) {
-		/* Conditional branch: B(1) */
-		DWORD cond = (instr & 0x0F00) >> 8;
-		if (ConditionPassed(cond)) {
-			DWORD immed_8 = (instr & 0x00FF);
-			if (immed_8 & 0x80) {
-				immed_8 |= 0xFFFFFF80;
-			}
-			r[15] = r[15] + 4 + (immed_8 << 1);
-			r[15] -= 2;
-		}
-	}
-	else if ((instr & 0xF800) == 0xE000) {
-		/* Unconditional branch */
-		DWORD signed_immed_11 = instr & 0x07FF;
-		if (signed_immed_11 & 0x0400) {
-			signed_immed_11 |= 0xFFFFFC00;
-		}
-		r[15] = r[15] + 4 + (signed_immed_11 << 1);
-		r[15] -= 2;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		if (Rd == 15) r[Rd] -= 2;
 	}
 	else {
-		std::cout << "Unrecognized encoding" << std::endl;
-		goto skip;
+		std::cout << "Unimplemented shift by immediate instruction." << std::endl;
+		return false;
 	}
-skip:
-	r[15] += 2;
-	return 0;
+	return true;
+}
+BOOL Processor::add_subtract_register(DWORD instr) { 
+	// It's not possible for PC to be referenced here!
+	// So no Rd == 15? etc. needed!!!
+	DWORD Rm = (instr & 0x01C0) >> 6;
+	DWORD Rn = (instr & 0x38) >> 3;
+	DWORD Rd = (instr & 0x7);
+	/* Add/subtract register */
+	if ((instr & 0x0200) == 0) { /* ADD (3) */
+		r[Rd] = r[Rn] + r[Rm];
+	}
+	else { /* SUB (3) */
+		r[Rd] = r[Rn] - r[Rm];
+	}
+	set_n_flag(r[Rd] & 0x80000000);
+	set_z_flag(!r[Rd]);
+	// TODO set C and V flags!!!
+	return true;
+}
+BOOL Processor::add_subtract_immediate(DWORD instr) { 
+	if ((instr & 0x0200) == 0) { /* ADD (1) */
+		DWORD immed_3 = (instr & 0x01C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
+		r[Rd] = n + immed_3;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		// TODO figure out C and V flags... CarryFrom and OverflowFrom
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else { /* SUB (1) */
+		DWORD immed_3 = (instr & 0x01C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
+		r[Rd] = n - immed_3;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		// TODO figure out C and V flags... CarryFrom and OverflowFrom
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	return true;
+}
+BOOL Processor::add_subtract_compare_move_immediate(DWORD instr) { 
+	DWORD opcode = (instr & 0x1800) >> 11;
+	if (opcode == 0) {
+		/* MOV (1) */
+		DWORD Rd = (instr & 0x0700) >> 8;
+		DWORD immed_8 = (instr & 0x00FF);
+		r[Rd] = immed_8;
+		set_n_flag(FALSE);
+		set_z_flag(!r[Rd]);
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if (opcode == 1) {
+		/* CMP (1) */
+		DWORD Rn = (instr & 0x0700) >> 8;
+		DWORD immed_8 = (instr & 0x00FF);
+		DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
+		DWORD alu_out = n - immed_8;
+		set_n_flag(alu_out & 0x80000000);
+		set_z_flag(!alu_out);
+		set_c_flag(n >= immed_8);
+		// TODO set V flag = OverflowFrom(Rn - immed_8)
+	}
+	else if (opcode == 2) {
+		/* ADD (2) */
+		DWORD Rd = (instr & 0x0700) >> 8;
+		DWORD immed_8 = (instr & 0x00FF);
+		r[Rd] = r[Rd] + immed_8;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		set_c_flag(r[Rd] >= immed_8);
+		// SET V FLAG TODO
+	}
+	else if (opcode == 3) {
+		/* SUB (2) */
+		DWORD Rd = (instr & 0x0700) >> 8;
+		DWORD immed_8 = (instr & 0x00FF);
+		r[Rd] = r[Rd] - immed_8;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		set_c_flag(r[Rd] >= immed_8);
+		// SET V FLAG TODO
+	}
+	else {
+		std::cout << "This add/subtract/compare/move immediate instruction is not yet implemented." << std::endl;
+		return false;
+	}
+	return true;
+}
+BOOL Processor::data_processing_register(DWORD instr) { 
+	DWORD op_5 = (instr & 0x03C0) >> 6;
+	if (op_5 == 0) { /* AND */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = instr & 0x0007;
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
+		r[Rd] = d & m;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if (op_5 == 0xC) { /* ORR */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = instr & 0x0007;
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
+		r[Rd] = d | m;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if (op_5 == 0xD) { /* MUL */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
+		r[Rd] = d * m;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if (op_5 == 0xA) { /* CMP */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rn = (instr & 0x0007);
+		DWORD alu_out = r[Rn] - r[Rm];
+		set_n_flag(alu_out & 0x80000000);
+		set_z_flag(!alu_out);
+		set_c_flag(r[Rn] >= r[Rm]);
+		// TODO set V flag!!! OVERFLOW???
+	}
+	else {
+		std::cout << "Unimplemented data processing register instruction." << std::endl;
+		return false;
+	}
+	return true;
+}
+BOOL Processor::special_data_processing(DWORD instr) { 
+	/* Special data processing: MOV (3) | ADD | CMP | CPY */
+	DWORD opcode = (instr & 0x0300) >> 8;
+	DWORD H1 = (instr & 0x0080) >> 7;
+	DWORD H2 = (instr & 0x0040) >> 6;
+	DWORD Rm = (instr & 0x0038) >> 3;
+	DWORD Rdn = (instr & 0x0007);
+	if (opcode == 2) { /* MOV (3) */
+		r[Rdn | (H1 << 3)] = r[Rm | (H2 << 3)];
+	}
+	else {
+		std::cout << "Special opcode not supported" << std::endl;
+		return false;
+	}
+	return true;
+}
+BOOL Processor::branch_exchange_instruction_set(DWORD instr) {
+	DWORD L = (instr & 0x0080) >> 7;
+	DWORD Rm = (instr & 0x0078) >> 3;
+	DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+	set_t_bit(m & 1);
+	r[15] = m & ~1;
+	r[15] -= 2;
+	return true;
+}
+BOOL Processor::load_from_literal_pool(DWORD instr) { 
+	/* Load from literal pool: LDR(3) */
+	DWORD Rd = (instr & 0x0700) >> 8;
+	DWORD immed_8 = (instr & 0x00FF);
+	DWORD address = ((r[15] + 4) & 0xFFFFFFFC) + (immed_8 * 4);
+	r[Rd] = mem->get_u32(address);
+	if (Rd == 15) r[Rd] -= 2;
+	return true;
+}
+BOOL Processor::load_store_register_offset(DWORD) { return false; }
+BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) { 
+	/* Load/store word/byte immediate offset */
+	if ((instr & 0xF800) == 0x6800) { /* LDR (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD address = r[Rn] + (immed_5 * 4);
+		if (Rn == 15) address += 4;
+		r[Rd] = mem->get_u32(address);
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if ((instr & 0xF800) == 0x6000) { /* STR (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD address = r[Rn] + (immed_5 * 4);
+		if (Rn == 15) address += 4;
+		DWORD data_to_store = r[Rd];
+		if (Rd == 15) data_to_store += 4;
+		mem->set_u32(address, data_to_store);
+	}
+	else {
+		std::cout << "This load or store instruction is not yet implemented." << std::endl;
+		return false;
+	}
+	return true;
+}
+BOOL Processor::load_store_halfword_immediate_offset(DWORD) { return false; }
+BOOL Processor::load_store_to_from_stack(DWORD instr) { 
+	DWORD L = (instr & 0x0800) >> 11;
+	DWORD Rd = (instr & 0x0700) >> 8;
+	DWORD immed_8 = (instr & 0x00FF);
+	if (L) {
+		DWORD address = r[13] + (immed_8 * 4);
+		r[Rd] = mem->get_u32(address);
+		if (Rd == 15) r[Rd] -= 2; // can't even be this tbh
+	}
+	else {
+		DWORD address = r[13] + (immed_8 * 4);
+		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd]; // can't even be this tbh
+		mem->set_u32(address, d);
+	}
+	return true; 
+}
+BOOL Processor::add_to_sp_or_pc(DWORD) { return false; }
+BOOL Processor::miscellaneous(DWORD instr) {
+	if ((instr & 0x0600) == 0x0400) {
+		/* Push/pop register list */
+		DWORD L = (instr & 0x0800) >> 11;
+		DWORD R = (instr & 0x0100) >> 8;
+		DWORD register_list = (instr & 0x00FF);
+		if (L == 0) { /* PUSH */
+			DWORD start_address = r[13] - 4 * (R + popcnt(register_list));
+			DWORD end_address = r[13] - 4;
+			DWORD address = start_address;
+			for (DWORD i = 0; i < 8; i++) {
+				if (register_list & (1 << i)) {
+					std::cout << "Setting mem[" << address << "] = " << r[i] << std::endl;
+					mem->set_u32(address, r[i]);
+					address += 4;
+				}
+			}
+			if (R) {
+				std::cout << "Setting mem[" << address << "] = " << r[14] << std::endl;
+				mem->set_u32(address, r[14]);
+				address += 4;
+			}
+			if (end_address != address - 4) {
+				std::cout << "WHATHT HTH" << std::endl;
+				return false;
+			}
+			r[13] = r[13] - 4 * (R + popcnt(register_list));
+		}
+		else { /* POP */
+			DWORD start_address = r[13];
+			DWORD end_address = r[13] + 4 * (R + popcnt(register_list));
+			DWORD address = start_address;
+
+			for (DWORD i = 0; i < 8; i++) {
+				if (register_list & (1 << i)) {
+					std::cout << "Setting r[" << i << "] = mem[" << address << "] = ";
+					r[i] = mem->get_u32(address);
+					std::cout << r[i] << std::endl;
+					address += 4;
+				}
+			}
+
+			if (R) {
+				DWORD value = mem->get_u32(address);
+				r[15] = value & 0xFFFFFFFE;
+				set_t_bit(value & 1);
+				address += 4;
+				r[15] -= 2;
+			}
+
+			if (end_address != address) {
+				std::cout << "ASRMFJgH LFLFWf" << std::endl;
+				return false;
+			}
+
+			r[13] = end_address;
+		}
+	}
+	else if ((instr & 0xFF00) == 0xB000) {
+		/* Adjust stack pointer */
+		DWORD immed_7 = instr & 0x007F;
+		if (instr & 0x0080) { /* SUB (4) */
+			r[13] -= (immed_7 << 2);
+		}
+		else { /* ADD (7) */
+			r[13] += (immed_7 << 2);
+		}
+	}
+	else {
+		std::cout << "Maldita sea" << std::endl;
+		return false;
+	}
+	return true;
+}
+BOOL Processor::load_store_multiple(DWORD) { return false; }
+BOOL Processor::conditional_branch(DWORD instr) { 
+	DWORD cond = (instr & 0x0F00) >> 8;
+	if (ConditionPassed(cond)) {
+		DWORD immed_8 = (instr & 0x00FF);
+		if (immed_8 & 0x80) {
+			immed_8 |= 0xFFFFFF80;
+		}
+		r[15] = r[15] + 4 + (immed_8 << 1);
+		r[15] -= 2;
+	}
+	return true;
+}
+BOOL Processor::undefined_instruction(DWORD) { return false; }
+BOOL Processor::software_interrupt(DWORD) { return false; }
+BOOL Processor::unconditional_branch(DWORD instr) { 
+	DWORD signed_immed_11 = instr & 0x07FF;
+	if (signed_immed_11 & 0x0400) {
+		signed_immed_11 |= 0xFFFFFC00;
+	}
+	r[15] = r[15] + 4 + (signed_immed_11 << 1);
+	r[15] -= 2;
+	return true;
+}
+BOOL Processor::blx_suffix(DWORD) { return false; }
+BOOL Processor::bl_blx_prefix(DWORD instr) { 
+	DWORD offset_11 = instr & 0x07FF;
+	if (offset_11 & 0x0400) {
+		offset_11 |= (~0x0400 + 1);
+	}
+	r[14] = r[15] + 4 + (offset_11 << 12);
+	return true;
+}
+BOOL Processor::bl_suffix(DWORD instr) { 
+	DWORD offset_11 = instr & 0x07FF;
+	DWORD address_of_next_instruction = r[15] + 2;
+	r[15] = r[14] + (offset_11 << 1) - 2;
+	r[14] = address_of_next_instruction | 1;
+	return true;
 }
 int Processor::step() {
 	mem->increment_LT_TIMER();
