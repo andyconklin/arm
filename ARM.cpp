@@ -4,6 +4,8 @@
 #include "stdafx.h"
 #include "PhysicalMemory.h"
 #include "Processor.h"
+#include "AES.h"
+#include "SHA.h"
 
 int ReadFileIntoMemory(PhysicalMemory *mem, LPCWSTR path_to_file, DWORD load_address) {
 	HANDLE hFile;
@@ -22,7 +24,7 @@ int ReadFileIntoMemory(PhysicalMemory *mem, LPCWSTR path_to_file, DWORD load_add
 
 	mem->add_segment(load_address, file_size);
 
-	ReadFile(hFile, &(*mem)[load_address], file_size, &bytes_read, NULL);
+	ReadFile(hFile, mem->get_buffer(load_address), file_size, &bytes_read, NULL);
 
 	if (bytes_read != file_size) {
 		std::cerr << "Not all bytes could be read from the file" << std::endl;
@@ -38,10 +40,15 @@ int main()
 	PhysicalMemory mem;
 	ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\jajaj.bin", 0x0D4100A0); /* boot0 */
 	mem.add_segment(0x0D800000, 0x6880); /* GPIO */
+	mem.add_segment(new AesSegment(0x0D020000)); /* AES */
+	mem.add_segment(new ShaSegment(0x0D030000)); /* SHA */
 	mem.clear_LT_TIMER();
 
 	Processor cpu(&mem);
+	cpu.continue_until(0x0D411AD4);
 	while (true) {
+		cpu.display_info();
+		system("pause");
 		cpu.step();
 	}
     return 0;

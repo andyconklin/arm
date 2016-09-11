@@ -303,7 +303,7 @@ int Processor::arm_step() {
 
 		if (L) {
 			if (B) {
-				r[Rd] = (DWORD)(*mem)[actual_address];
+				r[Rd] = mem->get_u8(actual_address);
 			}
 			else {
 				r[Rd] = mem->get_u32(actual_address);
@@ -318,7 +318,7 @@ int Processor::arm_step() {
 		}
 		else {
 			if (B) {
-				(*mem)[actual_address] = r[Rd] & 0xFF;
+				mem->set_u8(actual_address, r[Rd]);
 			}
 			else {
 				mem->set_u32(actual_address, r[Rd]);
@@ -395,7 +395,7 @@ int Processor::thumb_step() {
 	BOOL ret = (this->*(this->filters[f].second))(instr);
 	if (!ret)
 		throw "An instruction function returned false.";
-	r[15] += 2;
+  	r[15] += 2;
 	return ret;
 }
 BOOL Processor::shift_by_immediate(DWORD instr) { 
@@ -543,6 +543,15 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		set_z_flag(!r[Rd]);
 		if (Rd == 15) r[Rd] -= 2;
 	}
+	else if (op_5 == 0xA) { /* CMP */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rn = (instr & 0x0007);
+		DWORD alu_out = r[Rn] - r[Rm];
+		set_n_flag(alu_out & 0x80000000);
+		set_z_flag(!alu_out);
+		set_c_flag(r[Rn] >= r[Rm]);
+		// TODO set V flag!!! OVERFLOW???
+	}
 	else if (op_5 == 0xC) { /* ORR */
 		DWORD Rm = (instr & 0x0038) >> 3;
 		DWORD Rd = instr & 0x0007;
@@ -563,14 +572,13 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		set_z_flag(!r[Rd]);
 		if (Rd == 15) r[Rd] -= 2;
 	}
-	else if (op_5 == 0xA) { /* CMP */
+	else if (op_5 == 0xE) { /* BIC */
 		DWORD Rm = (instr & 0x0038) >> 3;
-		DWORD Rn = (instr & 0x0007);
-		DWORD alu_out = r[Rn] - r[Rm];
-		set_n_flag(alu_out & 0x80000000);
-		set_z_flag(!alu_out);
-		set_c_flag(r[Rn] >= r[Rm]);
-		// TODO set V flag!!! OVERFLOW???
+		DWORD Rd = (instr & 0x0007);
+		r[Rd] = r[Rd] & ~(r[Rm]);
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		// C and V unaffected.
 	}
 	else {
 		std::cout << "Unimplemented data processing register instruction." << std::endl;
@@ -670,13 +678,11 @@ BOOL Processor::miscellaneous(DWORD instr) {
 			DWORD address = start_address;
 			for (DWORD i = 0; i < 8; i++) {
 				if (register_list & (1 << i)) {
-					std::cout << "Setting mem[" << address << "] = " << r[i] << std::endl;
 					mem->set_u32(address, r[i]);
 					address += 4;
 				}
 			}
 			if (R) {
-				std::cout << "Setting mem[" << address << "] = " << r[14] << std::endl;
 				mem->set_u32(address, r[14]);
 				address += 4;
 			}
@@ -693,9 +699,7 @@ BOOL Processor::miscellaneous(DWORD instr) {
 
 			for (DWORD i = 0; i < 8; i++) {
 				if (register_list & (1 << i)) {
-					std::cout << "Setting r[" << i << "] = mem[" << address << "] = ";
 					r[i] = mem->get_u32(address);
-					std::cout << r[i] << std::endl;
 					address += 4;
 				}
 			}
@@ -783,4 +787,8 @@ void Processor::display_info() {
 	}
 	std::cout << "apsr: " << apsr << std::endl;
 	std::cout << "epsr: " << epsr << std::endl << std::dec;
+}
+
+void Processor::continue_until(DWORD addr) {
+	while (r[15] != addr) step();
 }

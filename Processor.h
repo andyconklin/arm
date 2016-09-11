@@ -10,6 +10,7 @@ class Processor {
 	DWORD epsr = 0;
 	PhysicalMemory *mem;
 
+	/********************** THUMB INSTRUCTION SET **********************/
 	BOOL shift_by_immediate(DWORD);
 	BOOL add_subtract_register(DWORD);
 	BOOL add_subtract_immediate(DWORD);
@@ -146,5 +147,6 @@ public:
 	Processor(PhysicalMemory *mem);
 	int step();
 	void display_info();
+	void continue_until(DWORD addr);
 };
 

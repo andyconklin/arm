@@ -30,6 +30,12 @@
     <ClInclude Include="PhysicalMemory.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="AES.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SHA.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -42,6 +48,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ARM.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AES.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SHA.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
