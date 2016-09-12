@@ -34,8 +34,27 @@ class Processor {
 	BOOL bl_blx_prefix(DWORD);
 	BOOL bl_suffix(DWORD);
 
+	/********************** ARM INSTRUCTION SET **********************/
+	BOOL arm_data_processing(DWORD);
+	BOOL arm_miscellaneous(DWORD);
+	BOOL arm_multiplies_extra_load_stores(DWORD);
+	BOOL arm_undefined_instruction(DWORD);
+	BOOL arm_move_immediate_to_status_register(DWORD);
+	BOOL arm_load_store(DWORD);
+	BOOL arm_media_instructions(DWORD);
+	BOOL arm_architecturally_undefined(DWORD);
+	BOOL arm_load_store_multiple(DWORD);
+	BOOL arm_branch_and_branch_with_link(DWORD);
+	BOOL arm_coprocessor_load_store_and_double_register_transfers(DWORD);
+	BOOL arm_coprocessor_data_processing(DWORD);
+	BOOL arm_coprocessor_register_transfers(DWORD);
+	BOOL arm_software_interrupt(DWORD);
+	BOOL arm_unconditional_instructions(DWORD);
+
 	typedef BOOL(Processor::*ProcHandleFn)(DWORD);
 	
+#define COND1(x) (((x) & 0xF0000000) != 0xF0000000)
+
 	std::pair<std::function<BOOL(DWORD)>, ProcHandleFn> filters[23] {
 		{
 			[](DWORD instr) { return (instr & 0xE000) == 0 && (instr & 0x1800) != 0x1800; },
@@ -128,6 +147,84 @@ class Processor {
 		{
 			[](DWORD instr) { return (instr & 0xF800) == 0xF800; },
 			&Processor::bl_suffix
+		},
+	};
+	std::pair<std::function<BOOL(DWORD)>, ProcHandleFn> arm_filters[19]{
+		{
+			[](DWORD instr) { return COND1(instr) && !(instr & 0x0E000010); },
+			&Processor::arm_data_processing
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0F900010) == 0x01000000; },
+			&Processor::arm_miscellaneous
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000090) == 0x00000010 && (instr & 0x01900000) != 0x01000000; },
+			&Processor::arm_data_processing
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0F900090) == 0x01000010; },
+			&Processor::arm_miscellaneous
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E900090) == 0x00000090; },
+			&Processor::arm_multiplies_extra_load_stores
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x02000000 && (instr & 0x01900000) != 0x01000000; },
+			&Processor::arm_data_processing
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x02000000; },
+			&Processor::arm_undefined_instruction
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x02200000; },
+			&Processor::arm_move_immediate_to_status_register
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x04000000; },
+			&Processor::arm_load_store
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000010) == 0x06000000; },
+			&Processor::arm_load_store
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000010) == 0x06000010; },
+			&Processor::arm_media_instructions
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0FF000F0) == 0x07F000F0; },
+			&Processor::arm_architecturally_undefined
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x08000000; },
+			&Processor::arm_load_store_multiple
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x0A000000; },
+			&Processor::arm_branch_and_branch_with_link
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x0C000000; },
+			&Processor::arm_coprocessor_load_store_and_double_register_transfers
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0F000010) == 0x0E000000; },
+			&Processor::arm_coprocessor_data_processing
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0F000010) == 0x0E000010; },
+			&Processor::arm_coprocessor_register_transfers
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0F000000) == 0x0F000000; },
+			&Processor::arm_software_interrupt
+		},
+		{
+			[](DWORD instr) { return COND1(instr) && (instr & 0xF0000000) == 0xF0000000; },
+			&Processor::arm_unconditional_instructions
 		},
 	};
 
