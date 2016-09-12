@@ -3,6 +3,8 @@
 #include "Processor.h"
 
 namespace {
+	BOOL shifter_carry_out = 0;
+
 	DWORD inline rotated_immediate(DWORD instr) {
 		DWORD imm = instr & 0x000000FF;
 		DWORD rot = ((instr & 0x00000F00) >> 8) * 2;
@@ -14,6 +16,23 @@ namespace {
 		i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
 		return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
 	}
+	BOOL inline BorrowFrom(DWORD a, DWORD b) {
+		return (a < b);
+	}
+	BOOL inline OverflowFrom(DWORD a, DWORD b, BOOL add) {
+		if (add)
+			return ((a & 0x80000000) == (b & 0x80000000)) &&
+			(((a + b) & 0x80000000) != (a & 0x80000000));
+		else
+			return ((a & 0x80000000) != (b & 0x80000000)) && 
+			(((a - b) & 0x80000000) != (a & 0x80000000));
+	}
+	BOOL inline CarryFrom(DWORD a, DWORD b) {
+		unsigned __int64 x = a;
+		unsigned __int64 y = b;
+		unsigned __int64 z = x + y;
+		return (z >> 32);
+	}
 };
 
 DWORD Processor::addressing_mode_1(DWORD instr) {
@@ -24,6 +43,10 @@ DWORD Processor::addressing_mode_1(DWORD instr) {
 	DWORD shifter_operand;
 	if (I) {
 		shifter_operand = rotated_immediate(instr);
+		if (!((instr >> 8) & 0xF))
+			shifter_carry_out = get_c_flag();
+		else
+			shifter_carry_out = (shifter_operand & 0x80000000) ? 1 : 0;
 	}
 	else {
 		if ((instr & 0x90) == 0x10) {
@@ -38,22 +61,68 @@ DWORD Processor::addressing_mode_1(DWORD instr) {
 			switch (shift) {
 			case 0:
 				/* LSL */
-				shifter_operand = r[Rm] << r[Rs];
+				if (!(r[Rs] & 0xFF)) {
+					shifter_operand = r[Rm];
+					shifter_carry_out = get_c_flag();
+				}
+				else if ((r[Rs] & 0xFF) < 32) {
+					shifter_operand = r[Rm] << (r[Rs] & 0xFF);
+					shifter_carry_out = r[Rm] >> (32 - (r[Rs] & 0xFF));
+				}
+				else if ((r[Rs] & 0xFF) == 32) {
+					shifter_operand = 0;
+					shifter_carry_out = r[Rm] & 0x1;
+				}
+				else { /* Rs[7:0] > 32 */
+					shifter_operand = 0;
+					shifter_carry_out = 0;
+				}
 				break;
 			case 1:
 				/* LSR */
-				shifter_operand = r[Rm] >> r[Rs];
+				if ((r[Rs] & 0xFF) == 0) {
+					shifter_operand = r[Rm];
+					shifter_carry_out = get_c_flag();
+				}
+				else if ((r[Rs] & 0xFF) < 32) {
+					shifter_operand = r[Rm] >> (r[Rs] & 0xFF);
+					shifter_carry_out = r[Rm] >> ((r[Rs] & 0xFF) - 1);
+				}
+				else if ((r[Rs] & 0xFF) == 32) {
+					shifter_operand = 0;
+					shifter_carry_out = r[Rm] & 0x80000000;
+				}
+				else /* Rs[7:0] > 32 */ {
+					shifter_operand = 0;
+					shifter_carry_out = 0;
+				}
 				break;
 			case 2:
 				/* ASR */
-				shifter_operand = r[Rm] >> r[Rs];
-				if (r[Rm] & 0x80000000) {
-					shifter_operand |= (~(1 << (32 - r[Rs])) + 1);
+				if ((r[Rs] & 0xFF) == 0) {
+					shifter_operand = r[Rm];
+					shifter_carry_out = get_c_flag();
+				}
+				else if ((r[Rs] & 0xFF) < 32) {
+					shifter_operand = r[Rm] >> (r[Rs] & 0xFF);
+					if (r[Rm] & 0x80000000)
+						shifter_operand |= (~(1 << (32 - (r[Rs] & 0xFF))) + 1);
+					shifter_carry_out = r[Rm] >> ((r[Rs] & 0xFF) - 1);
+				}
+				else { /* Rs[7:0] >= 32 */
+					if (!(r[Rm] & 0x80000000)) {
+						shifter_operand = 0;
+						shifter_carry_out = r[Rm] & 0x80000000;
+					}
+					else { /* Rm[31] == 1 */
+						shifter_operand = 0xFFFFFFFF;
+						shifter_carry_out = r[Rm] & 0x80000000;
+					}
 				}
 				break;
 			case 3:
 				/* rotate right by register */
-				std::cout << "Eff that!" << std::endl;
+				throw "Eff that!";
 				return 0xDEADC0DE;
 			}
 		}
@@ -65,21 +134,27 @@ DWORD Processor::addressing_mode_1(DWORD instr) {
 			switch (shift) {
 			case 0:
 				shifter_operand = r[Rm] << shift_imm;
+				shifter_carry_out = (!shift_imm) ? get_c_flag() : ((r[Rm] >> (32 - shift_imm)) & 0x1);
 				break;
 			case 1:
 				shifter_operand = (shift_imm) ? r[Rm] >> shift_imm : 0;
+				shifter_carry_out = (!shift_imm) ? r[Rm] & 0x80000000 : ((r[Rm] >> (shift_imm - 1)) & 0x1);
 				break;
 			case 2:
-				if (!shift_imm)
+				if (!shift_imm) {
 					shifter_operand = (r[Rm] & 0x80000000) ? 0xFFFFFFFF : 0;
+					shifter_carry_out = r[Rm] & 0x80000000;
+				}
 				else {
 					shifter_operand = r[Rm] >> shift_imm;
 					if (r[Rm] & 0x80000000) {
 						shifter_operand |= (~(1 << (32 - shift_imm)) + 1);
 					}
+					shifter_carry_out = (r[Rm] >> (shift_imm - 1)) & 0x1;
 				}
+				break;
 			case 3:
-				std::cout << "What even is ROR/RRX?" << std::endl;
+				throw "What even is ROR/RRX?";
 				return 0xDEADC0DE;
 			}
 		}
@@ -180,6 +255,21 @@ BOOL Processor::get_z_flag() {
 BOOL Processor::get_c_flag() {
 	return apsr & 0x20000000;
 }
+BOOL Processor::get_n_flag() {
+	return apsr &= 0x80000000;
+}
+void Processor::set_v_flag(BOOL val) {
+	if (val) {
+		apsr |= 0x10000000;
+	}
+	else {
+		apsr &= ~0x10000000;
+	}
+}
+BOOL Processor::get_v_flag() {
+	return apsr & 0x10000000;
+}
+
 void Processor::set_t_bit(BOOL val) {
 	if (val) {
 		epsr |= 0x01000000;
@@ -197,14 +287,30 @@ BOOL Processor::ConditionPassed(DWORD cond) {
 		return get_c_flag();
 	else if (cond == 0x3) // CC/LO
 		return !get_c_flag();
+	else if (cond == 0x4) // MI
+		return get_n_flag();
+	else if (cond == 0x5) // PL
+		return !get_n_flag();
+	else if (cond == 0x6) // VS
+		return get_v_flag();
+	else if (cond == 0x7) // VC
+		return !get_v_flag();
 	else if (cond == 0x8) // HI
 		return (get_c_flag() && !get_z_flag());
 	else if (cond == 0x9) // LS
 		return (!get_c_flag() || get_z_flag());
+	else if (cond == 0xA) // GE
+		return (get_n_flag() == get_v_flag());
+	else if (cond == 0xB) // LT
+		return (get_n_flag() != get_v_flag());
+	else if (cond == 0xC) // GT
+		return (!get_z_flag() && (get_n_flag() == get_v_flag()));
+	else if (cond == 0xD) // LE
+		return (get_z_flag() || (get_n_flag() != get_v_flag()));
 	else if (cond == 0xE) // AL
 		return true;
 	else {
-		std::cout << "Unimplemented condition!" << std::endl;
+		throw "Unimplemented condition!";
 		return false;
 	}
 }
@@ -264,6 +370,7 @@ BOOL Processor::shift_by_immediate(DWORD instr) {
 		}
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
+		/* V flag unaffected */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if ((instr & 0x1800) == 0x0800) { /* LSR (1) */
@@ -281,6 +388,7 @@ BOOL Processor::shift_by_immediate(DWORD instr) {
 		}
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
+		/* V flag unaffected */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else {
@@ -298,13 +406,16 @@ BOOL Processor::add_subtract_register(DWORD instr) {
 	/* Add/subtract register */
 	if ((instr & 0x0200) == 0) { /* ADD (3) */
 		r[Rd] = r[Rn] + r[Rm];
+		set_c_flag(CarryFrom(r[Rn], r[Rm]));
+		set_v_flag(OverflowFrom(r[Rn], r[Rm], true));
 	}
 	else { /* SUB (3) */
 		r[Rd] = r[Rn] - r[Rm];
+		set_c_flag(!BorrowFrom(r[Rn], r[Rm]));
+		set_v_flag(OverflowFrom(r[Rn], r[Rm], false));
 	}
 	set_n_flag(r[Rd] & 0x80000000);
 	set_z_flag(!r[Rd]);
-	// TODO set C and V flags!!!
 	return true;
 }
 BOOL Processor::add_subtract_immediate(DWORD instr) { 
@@ -316,7 +427,8 @@ BOOL Processor::add_subtract_immediate(DWORD instr) {
 		r[Rd] = n + immed_3;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		// TODO figure out C and V flags... CarryFrom and OverflowFrom
+		set_c_flag(CarryFrom(r[Rn], immed_3));
+		set_v_flag(OverflowFrom(r[Rn], immed_3, true));
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else { /* SUB (1) */
@@ -327,7 +439,8 @@ BOOL Processor::add_subtract_immediate(DWORD instr) {
 		r[Rd] = n - immed_3;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		// TODO figure out C and V flags... CarryFrom and OverflowFrom
+		set_c_flag(!BorrowFrom(r[Rn], immed_3));
+		set_v_flag(OverflowFrom(r[Rn], immed_3, false));
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	return true;
@@ -341,6 +454,7 @@ BOOL Processor::add_subtract_compare_move_immediate(DWORD instr) {
 		r[Rd] = immed_8;
 		set_n_flag(FALSE);
 		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if (opcode == 1) {
@@ -351,8 +465,8 @@ BOOL Processor::add_subtract_compare_move_immediate(DWORD instr) {
 		DWORD alu_out = n - immed_8;
 		set_n_flag(alu_out & 0x80000000);
 		set_z_flag(!alu_out);
-		set_c_flag(n >= immed_8);
-		// TODO set V flag = OverflowFrom(Rn - immed_8)
+		set_c_flag(!BorrowFrom(n, immed_8));
+		set_v_flag(OverflowFrom(n, immed_8, false));
 	}
 	else if (opcode == 2) {
 		/* ADD (2) */
@@ -361,8 +475,8 @@ BOOL Processor::add_subtract_compare_move_immediate(DWORD instr) {
 		r[Rd] = r[Rd] + immed_8;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		set_c_flag(r[Rd] >= immed_8);
-		// SET V FLAG TODO
+		set_c_flag(CarryFrom(r[Rd], immed_8));
+		set_v_flag(OverflowFrom(r[Rd], immed_8, true));
 	}
 	else if (opcode == 3) {
 		/* SUB (2) */
@@ -371,8 +485,8 @@ BOOL Processor::add_subtract_compare_move_immediate(DWORD instr) {
 		r[Rd] = r[Rd] - immed_8;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		set_c_flag(r[Rd] >= immed_8);
-		// SET V FLAG TODO
+		set_c_flag(!BorrowFrom(r[Rd], immed_8));
+		set_v_flag(OverflowFrom(r[Rd], immed_8, false));
 	}
 	else {
 		std::cout << "This add/subtract/compare/move immediate instruction is not yet implemented." << std::endl;
@@ -390,6 +504,7 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		r[Rd] = d & m;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if (op_5 == 0xA) { /* CMP */
@@ -398,8 +513,8 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		DWORD alu_out = r[Rn] - r[Rm];
 		set_n_flag(alu_out & 0x80000000);
 		set_z_flag(!alu_out);
-		set_c_flag(r[Rn] >= r[Rm]);
-		// TODO set V flag!!! OVERFLOW???
+		set_c_flag(!BorrowFrom(r[Rn], r[Rm]));
+		set_v_flag(OverflowFrom(r[Rn], r[Rm], false));
 	}
 	else if (op_5 == 0xC) { /* ORR */
 		DWORD Rm = (instr & 0x0038) >> 3;
@@ -409,6 +524,7 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		r[Rd] = d | m;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if (op_5 == 0xD) { /* MUL */
@@ -419,6 +535,7 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		r[Rd] = d * m;
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if (op_5 == 0xE) { /* BIC */
@@ -427,7 +544,7 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		r[Rd] = r[Rd] & ~(r[Rm]);
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
-		// C and V unaffected.
+		/* C and V unaffected. */
 	}
 	else {
 		std::cout << "Unimplemented data processing register instruction." << std::endl;
@@ -594,7 +711,46 @@ BOOL Processor::miscellaneous(DWORD instr) {
 	}
 	return true;
 }
-BOOL Processor::load_store_multiple(DWORD) { return false; }
+BOOL Processor::load_store_multiple(DWORD instr) { 
+	DWORD Rn = (instr >> 8) & 0x7;
+	DWORD register_list = (instr & 0xFF);
+
+	if ((instr >> 11) & 0x1) { /* LDMIA */
+		//MemoryAccess(B - bit, E - bit)
+		DWORD start_address = r[Rn];
+		DWORD end_address = r[Rn] + (popcnt(register_list) * 4) - 4;
+		DWORD address = start_address;
+		for (int i = 0; i < 8; i++) {
+			if ((register_list >> i) & 0x1) {
+				r[i] = mem->get_u32(address);
+				address += 4;
+			}
+		}
+		if (end_address != address - 4)
+			throw "a fit";
+		r[Rn] = r[Rn] + (popcnt(register_list) * 4);
+	}
+	else { /* STMIA */
+		// MemoryAccess(B - bit, E - bit)
+		// processor_id = ExecutingProcessor()
+		DWORD start_address = r[Rn];
+		DWORD end_address = r[Rn] + (popcnt(register_list) * 4) - 4;
+		DWORD address = start_address;
+		for (int i = 0; i < 8; i++) {
+			if ((register_list >> i) & 0x1) {
+				mem->set_u32(address, r[i]);
+				//if Shared(address then /* from ARMv6 */
+				//	physical_address = TLB(address
+				//		ClearExclusiveByAddress(physical_address, 4)
+				address += 4;
+			}
+		}
+		if (end_address != address - 4)
+			throw "a fit";
+		r[Rn] = r[Rn] + (popcnt(register_list) * 4);
+	}
+	return true;
+}
 BOOL Processor::conditional_branch(DWORD instr) { 
 	DWORD cond = (instr & 0x0F00) >> 8;
 	if (ConditionPassed(cond)) {
@@ -673,8 +829,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = shifter_carry_out
-				   V Flag = unaffected */
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
 			}
 		}
 		break;
@@ -689,8 +845,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = NOT BorrowFrom(Rn - shifter_operand)
-				   V Flag = OverflowFrom(Rn - shifter_operand) */
+				set_c_flag(!BorrowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
+				set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, false));
 			}
 		}
 		break;
@@ -705,8 +861,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = CarryFrom(Rn + shifter_operand)
-				   V Flag = OverflowFrom(Rn + shifter_operand) */
+				set_c_flag(CarryFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
+				set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, true));
 			}
 		}
 		break;
@@ -714,8 +870,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 		alu_out = (Rn == 15) ? r[Rn] + 8 - shifter_operand : r[Rn] - shifter_operand;
 		set_n_flag(alu_out & 0x80000000);
 		set_z_flag(!alu_out);
-		set_c_flag((Rn == 15) ? (r[Rn] + 8) >= shifter_operand : r[Rn] >= shifter_operand);
-		/* V Flag = OverflowFrom(Rn - shifter_operand) */
+		set_c_flag(!BorrowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
+		set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, false));
 		break;
 	case 0xC: /* ORR */
 		if (ConditionPassed(cond)) {
@@ -729,8 +885,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = shifter_carry_out
-				   V Flag = unaffected */
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
 			}
 		}
 		break;
@@ -745,8 +901,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = shifter_carry_out
-				   V Flag = unaffected */
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
 			}
 		}
 		break;
@@ -761,8 +917,8 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
 				set_z_flag(!r[Rd]);
-				/* C Flag = shifter_carry_out
-				   V Flag = unaffected */
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
 			}
 		}
 		break;

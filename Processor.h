@@ -233,8 +233,11 @@ class Processor {
 	void set_c_flag(BOOL val);
 	void set_n_flag(BOOL val);
 	void set_z_flag(BOOL val);
+	void set_v_flag(BOOL val);
 	BOOL get_z_flag();
 	BOOL get_c_flag();
+	BOOL get_n_flag();
+	BOOL get_v_flag();
 	void set_t_bit(BOOL val);
 	BOOL ConditionPassed(DWORD cond);
 	int arm_step();
