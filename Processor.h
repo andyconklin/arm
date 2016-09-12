@@ -149,7 +149,7 @@ class Processor {
 			&Processor::bl_suffix
 		},
 	};
-	std::pair<std::function<BOOL(DWORD)>, ProcHandleFn> arm_filters[19]{
+	std::pair<std::function<BOOL(DWORD)>, ProcHandleFn> arm_filters[19] {
 		{
 			[](DWORD instr) { return COND1(instr) && !(instr & 0x0E000010); },
 			&Processor::arm_data_processing
@@ -175,11 +175,11 @@ class Processor {
 			&Processor::arm_data_processing
 		},
 		{
-			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x02000000; },
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x03000000; },
 			&Processor::arm_undefined_instruction
 		},
 		{
-			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x02200000; },
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x03200000; },
 			&Processor::arm_move_immediate_to_status_register
 		},
 		{

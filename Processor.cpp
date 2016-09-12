@@ -215,7 +215,10 @@ int Processor::arm_step() {
 	for (DWORD i = 0; i < 19; i++) {
 		if (arm_filters[i].first(instr)) {
 			if (f == 0xFAFA) f = i;
-			else throw "Ambiguous thumb instruction reached!";
+			else {
+				std::cout << "Old f: " << f << " and new f: " << i << std::endl;
+				throw "Ambiguous thumb instruction reached!";
+			}
 		}
 	}
 	if (f == 0xFAFA)
@@ -439,8 +442,17 @@ BOOL Processor::special_data_processing(DWORD instr) {
 	DWORD H2 = (instr & 0x0040) >> 6;
 	DWORD Rm = (instr & 0x0038) >> 3;
 	DWORD Rdn = (instr & 0x0007);
-	if (opcode == 2) { /* MOV (3) */
-		r[Rdn | (H1 << 3)] = r[Rm | (H2 << 3)];
+
+	DWORD HRm = Rm | (H2 << 3);
+	DWORD HRdn = Rdn | (H1 << 3);
+
+	if (opcode == 0) { /* ADD (4) */
+		r[HRdn] = r[HRdn] + ((HRdn == 15) ? 4 : 0) + r[HRm] + ((HRm == 15) ? 4 : 0);
+		if (HRdn == 15) r[HRdn] -= 2;
+	}
+	else if (opcode == 2) { /* MOV (3) */
+		r[HRdn] = r[HRm] + ((HRm == 15) ? 4 : 0);
+		if (HRdn == 15) r[HRdn] -= 2;
 	}
 	else {
 		std::cout << "Special opcode not supported" << std::endl;
@@ -650,13 +662,45 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 	DWORD alu_out = 0;
 
 	switch (opcode) {
+	case 0x0:
+		if (ConditionPassed(cond)) {
+			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) & shifter_operand;
+			if (S && Rd == 15) {
+				/* if CurrentModeHasSPSR() then
+				     CPSR = SPSR
+				   else UNPREDICTABLE */
+			}
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				/* C Flag = shifter_carry_out
+				   V Flag = unaffected */
+			}
+		}
+		break;
+	case 0x2:
+		if (ConditionPassed(cond)) {
+			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) - shifter_operand;
+			if (S && Rd == 15) {
+				/* if CurrentModeHasSPSR() then
+				     CPSR = SPSR
+				   else UNPREDICTABLE */
+			}
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				/* C Flag = NOT BorrowFrom(Rn - shifter_operand)
+				   V Flag = OverflowFrom(Rn - shifter_operand) */
+			}
+		}
+		break;
 	case 0x4:
 		if (ConditionPassed(cond)) {
 			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) + shifter_operand;
 			if (S && Rd == 15) {
 				/* if CurrentModeHasSPSR() then
 				     CPSR = SPSR
-					 else UNPREDICTABLE */
+				   else UNPREDICTABLE */
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
