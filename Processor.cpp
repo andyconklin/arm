@@ -222,8 +222,53 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 err:
 	return 0xDEADC0DE;
 }
-Processor::Processor(PhysicalMemory *mem) : mem(mem) {
-	r[15] = 0x0D4100A0; 
+std::pair<DWORD,DWORD> Processor::addressing_mode_4(DWORD instr) {
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD P = (instr >> 24) & 0x1;
+	DWORD U = (instr >> 23) & 0x1;
+	DWORD S = (instr >> 22) & 0x1;
+	DWORD W = (instr >> 21) & 0x1;
+	DWORD L = (instr >> 20) & 0x1;
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD register_list = (instr & 0xFFFF);
+	DWORD start_address;
+	DWORD end_address;
+	if (P) {
+		if (U) { /* increment before */
+			start_address = r[Rn] + ((Rn == 15) ? 12 : 4);
+			end_address = r[Rn] + ((Rn == 15) ? 8 : 0) + (popcnt(register_list) * 4);
+			if (ConditionPassed(cond) && W) {
+				r[Rn] = r[Rn] + ((Rn == 15) ? 4 : 0) + (popcnt(register_list) * 4);
+			}
+		}
+		else { /* decrement before */
+			start_address = r[Rn] + ((Rn == 15) ? 8 : 0) - (popcnt(register_list) * 4);
+			end_address = r[Rn] + ((Rn == 15) ? 8 : 0) - 4;
+			if (ConditionPassed(cond) && W) {
+				r[Rn] = r[Rn] + ((Rn == 15) ? 4 : 0) - (popcnt(register_list) * 4);
+			}
+		}
+	}
+	else { 
+		if (U) { /* increment after */
+			start_address = r[Rn] + ((Rn == 15) ? 8 : 0);
+			end_address = r[Rn] + ((Rn == 15) ? 8 : 0) + (popcnt(register_list) * 4) - 4;
+			if (ConditionPassed(cond) && W) {
+				r[Rn] = r[Rn] + ((Rn == 15) ? 4 : 0) + (popcnt(register_list) * 4);
+			}
+		}
+		else { /* decrement after */
+			start_address = r[Rn] + ((Rn == 15) ? 8 : 0) - (popcnt(register_list) * 4) + 4;
+			end_address = r[Rn] + ((Rn == 15) ? 8 : 0);
+			if (ConditionPassed(cond) && W) {
+				r[Rn] = r[Rn] + ((Rn == 15) ? 4 : 0) - (popcnt(register_list) * 4);
+			}
+		}
+	}
+	return { start_address, end_address };
+}
+Processor::Processor(PhysicalMemory *mem, DWORD start_addr) : mem(mem) {
+	r[15] = start_addr; 
 }
 void Processor::set_c_flag(BOOL val) {
 	if (val) {
@@ -350,7 +395,7 @@ int Processor::thumb_step() {
 	BOOL ret = (this->*(this->filters[f].second))(instr);
 	if (!ret)
 		throw "An instruction function returned false.";
-  	r[15] += 2;
+    	r[15] += 2;
 	return ret;
 }
 BOOL Processor::shift_by_immediate(DWORD instr) { 
@@ -507,6 +552,71 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		/* C and V unaffected. */
 		if (Rd == 15) r[Rd] -= 2;
 	}
+	else if (op_5 == 0x1) { /* EOR */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = instr & 0x0007;
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd];
+		r[Rd] = d ^ m;
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
+		if (Rd == 15) r[Rd] -= 2;
+	}
+	else if (op_5 == 0x2) { /* LSL (2) */
+		DWORD Rs = (instr & 0x0038) >> 3;
+		DWORD Rd = instr & 0x0007;
+		if (!(r[Rs] & 0xFF)) {
+			/* C and Rd unaffected */
+		}
+		else if ((r[Rs] & 0xFF) < 32) {
+			set_c_flag((r[Rd] >> (32 - (r[Rs] & 0xFF))) & 0x1);
+			r[Rd] = r[Rd] << (r[Rs] & 0xFF);
+		}
+		else if ((r[Rs] & 0xFF) == 32) {
+			set_c_flag(r[Rd] & 0x1);
+			r[Rd] = 0;
+		}
+		else {
+			set_c_flag(false);
+			r[Rd] = 0;
+		}
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		/* V flag unaffected */
+	}
+	else if (op_5 == 0x3) { /* LSR (2) */
+		DWORD Rs = (instr & 0x0038) >> 3;
+		DWORD Rd = instr & 0x0007;
+		if (!(r[Rs] & 0xFF)) {
+			/* C and Rd unaffected */
+		}
+		else if ((r[Rs] & 0xFF) < 32) {
+			set_c_flag((r[Rd] >> ((r[Rs] & 0xFF) - 1)) & 0x1);
+			r[Rd] = r[Rd] >> (r[Rs] & 0xFF);
+		}
+		else if ((r[Rs] & 0xFF) == 32) {
+			set_c_flag(r[Rd] & 0x80000000);
+			r[Rd] = 0;
+		}
+		else {
+			set_c_flag(false);
+			r[Rd] = 0;
+		}
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		/* V flag unaffected */
+	}
+	else if (op_5 == 0x8) { /* TST */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rn = instr & 0x0007;
+		DWORD m = (Rm == 15) ? r[Rm] + 4 : r[Rm];
+		DWORD n = (Rn == 15) ? r[Rn] + 4 : r[Rn];
+		DWORD alu_out = n & m;
+		set_n_flag(alu_out & 0x80000000);
+		set_z_flag(!alu_out);
+		/* C and V unaffected. */
+	}
 	else if (op_5 == 0xA) { /* CMP */
 		DWORD Rm = (instr & 0x0038) >> 3;
 		DWORD Rn = (instr & 0x0007);
@@ -542,6 +652,14 @@ BOOL Processor::data_processing_register(DWORD instr) {
 		DWORD Rm = (instr & 0x0038) >> 3;
 		DWORD Rd = (instr & 0x0007);
 		r[Rd] = r[Rd] & ~(r[Rm]);
+		set_n_flag(r[Rd] & 0x80000000);
+		set_z_flag(!r[Rd]);
+		/* C and V unaffected. */
+	}
+	else if (op_5 == 0xF) { /* MVN */
+		DWORD Rm = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		r[Rd] = ~r[Rm];
 		set_n_flag(r[Rd] & 0x80000000);
 		set_z_flag(!r[Rd]);
 		/* C and V unaffected. */
@@ -595,7 +713,41 @@ BOOL Processor::load_from_literal_pool(DWORD instr) {
 	if (Rd == 15) r[Rd] -= 2;
 	return true;
 }
-BOOL Processor::load_store_register_offset(DWORD) { return false; }
+BOOL Processor::load_store_register_offset(DWORD instr) { 
+	DWORD Rm = (instr >> 6) & 0x7;
+	DWORD Rn = (instr >> 3) & 0x7;
+	DWORD Rd = (instr) & 0x7;
+	DWORD address, data;
+
+	if ((instr >> 11) & 0x1) { /* LDR (2) */
+		//MemoryAccess(B - bit, E - bit)
+		address = r[Rn] + r[Rm];
+		//if (CP15_reg1_Ubit == 0)
+		//	if address[1:0] == 0b00 then
+		//		data = Memory[address, 4]
+		//	else
+		//		data = UNPREDICTABLE
+		//else /* CP15_reg1_Ubit == 1 */
+		data = mem->get_u32(address);
+		r[Rd] = data;
+	}
+	else { /* STR (2) */
+		//MemoryAccess(B - bit, E - bit)
+		//processor_id = ExecutingProcessor()
+		address = r[Rn] + r[Rm];
+		//if (CP15_reg1_Ubit == 0)
+		//	if address[1:0] == 0b00 then
+		//		Memory[address, 4] = Rd
+		//	else
+		//		Memory[address, 4] = UNPREDICTABLE
+		//else /* CP15_reg1_Ubit == 1 */
+		mem->set_u32(address, r[Rd]);
+		//	if Shared(address) then /* from ARMv6 */
+		//		physical_address = TLB(address)
+		//		ClearExclusiveByAddress(physical_address, 4)
+	}
+	return true;
+}
 BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) { 
 	/* Load/store word/byte immediate offset */
 	if ((instr & 0xF800) == 0x6800) { /* LDR (1) */
@@ -617,13 +769,65 @@ BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) {
 		if (Rd == 15) data_to_store += 4;
 		mem->set_u32(address, data_to_store);
 	}
+	else if ((instr & 0xF800) == 0x7800) { /* LDRB (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		DWORD address = r[Rn] + immed_5;
+		r[Rd] = mem->get_u8(address);
+	}
+	else if ((instr & 0xF800) == 0x7000) { /* STRB (1) */
+		DWORD immed_5 = (instr & 0x07C0) >> 6;
+		DWORD Rn = (instr & 0x0038) >> 3;
+		DWORD Rd = (instr & 0x0007);
+		//MemoryAccess(B - bit, E - bit)
+		//processor_id = ExecutingProcessor()
+		DWORD address = r[Rn] + immed_5;
+		mem->set_u8(address, r[Rd] & 0xFF);
+		//if Shared(address) then /* from ARMv6 */
+		//	physical_address = TLB(address)
+		//	ClearExclusiveByAddress(physical_address, 1)
+	}
 	else {
 		std::cout << "This load or store instruction is not yet implemented." << std::endl;
 		return false;
 	}
 	return true;
 }
-BOOL Processor::load_store_halfword_immediate_offset(DWORD) { return false; }
+BOOL Processor::load_store_halfword_immediate_offset(DWORD instr) { 
+	DWORD immed_5 = (instr >> 6) & 0x1F;
+	DWORD Rn = (instr >> 3) & 0x7;
+	DWORD Rd = (instr & 0x7);
+
+	if ((instr >> 11) & 0x1) { /* LDRH (1) */
+		// MemoryAccess(B - bit, E - bit)
+		DWORD address = r[Rn] + (immed_5 * 2);
+		//if (CP15_reg1_Ubit == 0)
+		//	if address[0] == 0b0 then
+		//		data = Memory[address, 2]
+		//	else
+		//		data = UNPREDICTABLE
+		//else /* CP15_reg1_Ubit == 1 */
+		DWORD data = mem->get_u16(address);
+		r[Rd] = data & 0xFFFF;
+	}
+	else { /* STRH (1) */
+		//MemoryAccess(B - bit, E - bit)
+		//processor_id = ExecutingProcessor()
+		DWORD address = r[Rn] + (immed_5 * 2);
+		//if (CP15_reg1_Ubit == 0)
+		//	if address[0] == 0b0 then
+		//		Memory[address, 2] = Rd[15:0]
+		//	else
+		//		Memory[address, 2] = UNPREDICTABLE
+		//else /* CP15_reg1_Ubit == 1 */
+		mem->set_u16(address, r[Rd] & 0xFFFF);
+		//	if Shared(address) then /* from ARMv6 */
+		//		physical_address = TLB(address)
+		//		ClearExclusiveByAddress(physical_address, 2)
+	}
+	return true;
+}
 BOOL Processor::load_store_to_from_stack(DWORD instr) { 
 	DWORD L = (instr & 0x0800) >> 11;
 	DWORD Rd = (instr & 0x0700) >> 8;
@@ -866,6 +1070,15 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			}
 		}
 		break;
+	case 0x8:
+		if (ConditionPassed(cond)) {
+			alu_out = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) & shifter_operand;
+			set_n_flag(alu_out & 0x80000000);
+			set_z_flag(!alu_out);
+			set_c_flag(shifter_carry_out);
+			/* V flag unaffected. */
+		}
+		break;
 	case 0xA: /* CMP */
 		alu_out = (Rn == 15) ? r[Rn] + 8 - shifter_operand : r[Rn] - shifter_operand;
 		set_n_flag(alu_out & 0x80000000);
@@ -1000,7 +1213,64 @@ BOOL Processor::arm_load_store(DWORD instr) {
 }
 BOOL Processor::arm_media_instructions(DWORD) { return false; }
 BOOL Processor::arm_architecturally_undefined(DWORD) { return false; }
-BOOL Processor::arm_load_store_multiple(DWORD) { return false; }
+BOOL Processor::arm_load_store_multiple(DWORD instr) { 
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD P = (instr >> 24) & 0x1;
+	DWORD U = (instr >> 23) & 0x1;
+	DWORD S = (instr >> 22) & 0x1;
+	DWORD W = (instr >> 21) & 0x1;
+	DWORD L = (instr >> 20) & 0x1;
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD register_list = (instr & 0xFFFF);
+	std::pair<DWORD, DWORD> start_end_addresses = addressing_mode_4(instr);
+
+	if (S == 0 && L == 0) {
+		/* STM (1) */
+		//MemoryAccess(B - bit, E - bit)
+		//processor_id = ExecutingProcessor()
+		if (ConditionPassed(cond)) {
+			DWORD address = start_end_addresses.first;
+			for (int i = 0; i < 16; i++) {
+				if ((register_list >> i) & 0x1) {
+					mem->set_u32(address, r[i] + ((i == 15) ? 8 : 0));
+					address += 4;
+					//if Shared(address) then /* from ARMv6 */
+					//	physical_address = TLB(address)
+					//	ClearExclusiveByAddress(physical_address, processor_id, 4)
+						/* See Summary of operation on page A2-49 */
+				}
+			}
+			if (start_end_addresses.second != address - 4)
+				throw "a fit";
+		}
+	}
+	else if (S == 0 && L == 1) {
+		/* LDM (1) */
+		//MemoryAccess(B-bit, E-bit)
+		if (ConditionPassed(cond)) {
+			DWORD address = start_end_addresses.first;
+			for (int i = 0; i < 15; i++) {
+				if ((register_list >> i) & 0x1) {
+					r[i] = mem->get_u32(address);
+					address += 4;
+				}
+			}
+			if ((register_list >> 15) & 0x1) {
+				DWORD value = mem->get_u32(address);
+				//if (architecture version 5 or above) then
+				r[15] = (value & 0xFFFFFFFE) - 4;
+				set_t_bit(value & 0x1);
+				//else
+				//	pc = value AND 0xFFFFFFFC
+				address += 4;
+			}
+			if (start_end_addresses.second != address - 4)
+				throw "a fit";
+		}
+	}
+	else return false;
+	return true;
+}
 BOOL Processor::arm_branch_and_branch_with_link(DWORD instr) { 
 	DWORD cond = (instr >> 28) & 0xF;
 	DWORD L = (instr >> 24) & 0x1;

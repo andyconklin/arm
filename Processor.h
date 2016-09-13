@@ -230,6 +230,7 @@ class Processor {
 
 	DWORD addressing_mode_1(DWORD instr);
 	DWORD addressing_mode_2(DWORD instr);
+	std::pair<DWORD, DWORD> addressing_mode_4(DWORD instr);
 	void set_c_flag(BOOL val);
 	void set_n_flag(BOOL val);
 	void set_z_flag(BOOL val);
@@ -244,7 +245,7 @@ class Processor {
 	int thumb_step();
 
 public:
-	Processor(PhysicalMemory *mem);
+	Processor(PhysicalMemory *mem, DWORD start_addr);
 	int step();
 	void display_info();
 	void continue_until(DWORD addr);
