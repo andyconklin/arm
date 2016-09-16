@@ -16,6 +16,13 @@ namespace {
 		return (val >> shift) | (val << ((~shift + 1) & 0x1F));
 	}
 
+	DWORD inline arithmetic_right(DWORD val, DWORD shift) {
+		DWORD r = val >> shift;
+		if (val & 0x80000000)
+			r |= (~(1 << (32 - shift)) + 1);
+		return r;
+	}
+
 	DWORD inline popcnt(DWORD i) {
 		i = i - ((i >> 1) & 0x55555555);
 		i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
@@ -248,61 +255,186 @@ DWORD Processor::addressing_mode_1(DWORD instr) {
 	return shifter_operand;
 }
 DWORD Processor::addressing_mode_2(DWORD instr) {
-	DWORD I = (instr & 0x02000000) >> 25;
-	DWORD U = (instr & 0x00800000) >> 23;
-	DWORD Rn = (instr & 0x000F0000) >> 16;
-	DWORD calculated_address;
-	/* Addressing mode 2 */
-	if (I) {
-		if (instr & 0x10) {
-			std::cout << "not a load or store" << std::endl;
-			goto err;
-		}
-		/* Scaled register offset */
-		DWORD shift_imm = (instr & 0x00000F80) >> 7;
-		DWORD shift = (instr & 0x60) >> 5;
-		DWORD Rm = (instr & 0xF);
-		if (Rm == 15) {
-			std::cout << "UNPREDICTABLE." << std::endl;
-			goto err;
-		}
-		DWORD index;
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD P = (instr >> 24) & 0x1;
+	DWORD U = (instr >> 23) & 0x1;
+	DWORD B = (instr >> 22) & 0x1;
+	DWORD W = (instr >> 21) & 0x1;
+	DWORD L = (instr >> 20) & 0x1;
+
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD Rd = (instr >> 12) & 0xF;
+	DWORD Rm = instr & 0xF;
+	DWORD offset_12 = instr & 0xFF;
+
+	DWORD shift = (instr >> 5) & 0x3;
+	DWORD shift_imm = (instr >> 7) & 0x1F;
+
+	DWORD Rnadj = (Rn == 15) ? r[Rn] + 8 : r[Rn];
+	DWORD Rdadj = (Rd == 15) ? r[Rd] + 8 : r[Rd];
+
+	DWORD address = 0;
+	DWORD index = 0;
+
+	if (((instr >> 25) & 0x7) == 0b010 && P && !W) {
+		std::cout << "A" << std::endl;
+		if (U) address = Rnadj + offset_12;
+		else address = Rnadj - offset_12;
+	}
+	else if (((instr >> 25) & 0x7) == 0b011 && P && !W && ((instr >> 4) & 0xFF) == 0) {
+		if (Rm == 15) throw "UNPREDICTABLE";
+		std::cout << "B" << std::endl;
+		if (U) address = Rnadj + r[Rm];
+		else address = Rnadj - r[Rm];
+	}
+	else if (((instr >> 25) & 0x7) == 0b011 && P && !W && !((instr >> 4) & 0x1)) {
+		if (Rm == 15) throw "UNPREDICTABLE";
+		std::cout << "C" << std::endl;
 		switch (shift) {
-		case 0:
-			/* LSL */
+		case 0b00:
 			index = r[Rm] << shift_imm;
 			break;
-		case 1:
-			/* LSR */
-			index = r[Rm] >> shift_imm;
+		case 0b01:
+			if (shift_imm == 0) index = 0;
+			else index = r[Rm] >> shift_imm;
 			break;
-		case 2:
-			/* ASR */
-			if (!shift_imm)
-				index = (r[Rm] & 0x80000000) ? 0xFFFFFFFF : 0;
-			else {
-				index = r[Rm] >> shift_imm;
-				if (r[Rm] & 0x80000000) {
-					index |= (~(1 << (32 - shift_imm)) + 1);
-				}
-			}
+		case 0b10:
+			if (shift_imm == 0)
+				if ((r[Rm] >> 31) & 0x1)
+					index = 0xFFFFFFFF;
+				else
+					index = 0;
+			else
+				index = arithmetic_right(r[Rm], shift_imm);
 			break;
-		case 3:
-			/* ROR or RRX */
-			std::cout << "Implement this later!" << std::endl;
-			goto err;
+		case 0b11:
+			if (shift_imm == 0)
+				index = ((get_c_flag() ? 1 : 0) << 31) | r[Rm] >> 1;
+			else
+				index = rotate_right(r[Rm], shift_imm);
+			break;
+		default:
+			throw "???";
 		}
-		calculated_address = U ? r[Rn] + index : r[Rn] - index;
-		if (Rn == 15) calculated_address += 8;
+		if (U) address = Rnadj + index;
+		else address = Rnadj - index;
 	}
-	else {
-		/* Immediate offset/index */
-		calculated_address = U ? r[Rn] + (instr & 0xFFF) : r[Rn] - (instr & 0xFFF);
-		if (Rn == 15) calculated_address += 8;
+	else if (((instr >> 25) & 0x7) == 0b010 && P && W) {
+		if (Rn == 15) throw "UNPREDICTABLE";
+		std::cout << "D" << std::endl;
+		if (U)
+			address = r[Rn] + offset_12;
+		else
+			address = r[Rn] - offset_12;
+		if (ConditionPassed(cond))
+			r[Rn] = address;
 	}
-	return calculated_address;
-err:
-	return 0xDEADC0DE;
+	else if (((instr >> 25) & 0x7) == 0b011 && P && W && ((instr >> 4) & 0xFF) == 0) {
+		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
+		std::cout << "E" << std::endl;
+		if (U)
+			address = r[Rn] + r[Rm];
+		else
+			address = r[Rn] - r[Rm];
+		if (ConditionPassed(cond))
+			r[Rn] = address;
+	}
+	else if (((instr >> 25) & 0x7) == 0b011 && P && W && ((instr >> 4) & 0x1) == 0) {
+		if (Rn == 15) throw "UNPREDICTABLE";
+		std::cout << "F" << std::endl;
+		switch (shift) {
+		case 0b00:
+			index = r[Rm] << shift_imm;
+			break;
+		case 0b01:
+			if (shift_imm == 0) index = 0;
+			else index = r[Rm] >> shift_imm;
+			break;
+		case 0b10:
+			if (shift_imm == 0)
+				if ((r[Rm] >> 31) & 0x1)
+					index = 0xFFFFFFFF;
+				else
+					index = 0;
+			else
+				index = arithmetic_right(r[Rm], shift_imm);
+			break;
+		case 0b11:
+			if (shift_imm == 0)
+				index = ((get_c_flag() ? 1 : 0) << 31) | r[Rm] >> 1;
+			else
+				index = rotate_right(r[Rm], shift_imm);
+			break;
+		default:
+			throw "???";
+		}
+		if (U)
+			address = r[Rn] + index;
+		else
+			address = r[Rn] - index;
+		if (ConditionPassed(cond))
+			r[Rn] = address;
+	}
+	else if (((instr >> 25) & 0x7) == 0b010 && !P && !W) {
+		if (Rn == 15) throw "UNPREDICTABLE";
+		std::cout << "G" << std::endl;
+		address = r[Rn];
+		if (ConditionPassed(cond))
+			if (U)
+				r[Rn] = r[Rn] + offset_12;
+			else
+				r[Rn] = r[Rn] - offset_12;
+	}
+	else if (((instr >> 25) & 0x7) == 0b011 && !P && !W && ((instr >> 4) & 0xFF) == 0) {
+		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
+		std::cout << "H" << std::endl;
+		address = r[Rn];
+		if (ConditionPassed(cond))
+			if (U) {
+				r[Rn] = r[Rn] + r[Rm];
+				std::cout << "Ayyyoooo " << r[Rm] << std::endl;
+			}
+			else
+				r[Rn] = r[Rn] - r[Rm];
+	}
+	else if (((instr >> 25) & 0x7) == 0b011 && !P && !W && ((instr >> 4) & 0x1) == 0) {
+		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
+		std::cout << "I" << std::endl;
+		address = r[Rn];
+		switch (shift) {
+		case 0b00:
+			index = r[Rm] << shift_imm;
+			break;
+		case 0b01:
+			if (shift_imm == 0) index = 0;
+			else index = r[Rm] >> shift_imm;
+			break;
+		case 0b10:
+			if (shift_imm == 0)
+				if ((r[Rm] >> 31) & 0x1)
+					index = 0xFFFFFFFF;
+				else
+					index = 0;
+			else
+				index = arithmetic_right(r[Rm], shift_imm);
+			break;
+		case 0b11:
+			if (shift_imm == 0)
+				index = ((get_c_flag() ? 1 : 0) << 31) | r[Rm] >> 1;
+			else
+				index = rotate_right(r[Rm], shift_imm);
+			break;
+		default:
+			throw "???";
+		}
+		if (ConditionPassed(cond))
+			if (U)
+				r[Rn] = r[Rn] + index;
+			else
+				r[Rn] = r[Rn] - index;
+	}
+	else throw "Unrecognized addressing mode";
+	return address;
 }
 DWORD Processor::addressing_mode_3(DWORD instr) {
 	DWORD cond = (instr >> 28) & 0xF;
@@ -403,7 +535,7 @@ std::pair<DWORD,DWORD> Processor::addressing_mode_4(DWORD instr) {
 	}
 	return { start_address, end_address };
 }
-
+	
 Processor::Processor(PhysicalMemory *mem, DWORD start_addr) : mem(mem) {
 	r[15] = start_addr; 
 }
@@ -1444,44 +1576,38 @@ BOOL Processor::arm_load_store(DWORD instr) {
 	DWORD Rd = (instr >> 12) & 0xF;
 	DWORD immediate = (instr & 0xFFF);
 	DWORD address = addressing_mode_2(instr);
+	DWORD data = 0;
 
 	if (ConditionPassed(cond)) {
-		if (P == 0) {
-			/* post-indexed addressing */
-			if (L) {
-				if (B) r[Rd] = mem->get_u8((Rn == 15) ? r[Rn] + 8 : r[Rn]);
-				else r[Rd] = mem->get_u32((Rn == 15) ? r[Rn] + 8 : r[Rn]);
+		if (L) {
+			if (!B) {
+				// CP15_reg1_Ubit stuff omitted
+				data = mem->get_u32(address);
 				if (Rd == 15) {
-					set_t_bit(r[Rd] & 0x1);
-					r[Rd] &= ~0x1;
+					r[15] = data & 0xFFFFFFFE;
+					set_t_bit(data & 0x80000000);
+				}
+				else {
+					r[Rd] = data;
 				}
 			}
 			else {
-				if (B) mem->set_u8((Rn == 15) ? r[Rn] + 8 : r[Rn], (Rd == 15) ? r[Rd] + 8 : r[Rd]);
-				else mem->set_u32((Rn == 15) ? r[Rn] + 8 : r[Rn], (Rd == 15) ? r[Rd] + 8 : r[Rd]);
+				if (Rd == 15) throw "UNPREDICTABLE";
+				r[Rd] = mem->get_u8(address);
 			}
-			r[Rn] = (Rn == 15) ? address - 4 : address;
+			if (Rd == 15) r[Rd] -= 4;
 		}
 		else {
-			/* offset or pre-indexed addressing */
-			if (L) {
-				if (B) r[Rd] = mem->get_u8(address);
-				else r[Rd] = mem->get_u32(address);
-				if (Rd == 15) {
-					set_t_bit(r[Rd] & 0x1);
-					r[Rd] &= ~0x1;
-				}
+			if (!B) {
+				mem->set_u32(address, (Rd == 15) ? r[Rd] + 8 : r[Rd]);
+				// omitted shared stuff
 			}
 			else {
-				if (B) mem->set_u8(address, (Rd == 15) ? r[Rd] + 8 : r[Rd]);
-				else mem->set_u32(address, (Rd == 15) ? r[Rd] + 8 : r[Rd]);
+				if (Rd == 15) throw "UNPREDICTABLE";
+				mem->set_u8(address, r[Rd] & 0xFF);
 			}
-			if (W)
-				r[Rn] = (Rn == 15) ? address - 4 : address;
 		}
 
-		if (Rd == 15)
-			r[Rd] -= 4;
 	}
 	return true;
 }
