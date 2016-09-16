@@ -14,3 +14,6 @@
 #include <vector>
 #include <functional>
 #include <utility>
+#include <map>
+
+#include <elfio/elfio.hpp>

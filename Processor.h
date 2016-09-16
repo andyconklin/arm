@@ -6,9 +6,12 @@
 class Processor {
 	DWORD r[16];
 	DWORD cp15 = 0xDEADC0DE;
-	DWORD apsr = 0;
-	DWORD epsr = 0;
+	DWORD cpsr = 0;
+	DWORD spsr = 0;
 	PhysicalMemory *mem;
+
+	BOOL InAPrivilegedMode();
+	BOOL CurrentModeHasSPSR();
 
 	/********************** THUMB INSTRUCTION SET **********************/
 	BOOL shift_by_immediate(DWORD);
@@ -39,7 +42,7 @@ class Processor {
 	BOOL arm_miscellaneous(DWORD);
 	BOOL arm_multiplies_extra_load_stores(DWORD);
 	BOOL arm_undefined_instruction(DWORD);
-	BOOL arm_move_immediate_to_status_register(DWORD);
+	BOOL arm_move_to_status_register(DWORD);
 	BOOL arm_load_store(DWORD);
 	BOOL arm_media_instructions(DWORD);
 	BOOL arm_architecturally_undefined(DWORD);
@@ -180,7 +183,7 @@ class Processor {
 		},
 		{
 			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x03200000; },
-			&Processor::arm_move_immediate_to_status_register
+			&Processor::arm_move_to_status_register
 		},
 		{
 			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x04000000; },

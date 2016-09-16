@@ -272,57 +272,57 @@ Processor::Processor(PhysicalMemory *mem, DWORD start_addr) : mem(mem) {
 }
 void Processor::set_c_flag(BOOL val) {
 	if (val) {
-		apsr |= 0x20000000;
+		cpsr |= 0x20000000;
 	}
 	else {
-		apsr &= ~0x20000000;
+		cpsr &= ~0x20000000;
 	}
 }
 void Processor::set_n_flag(BOOL val) {
 	if (val) {
-		apsr |= 0x80000000;
+		cpsr |= 0x80000000;
 	}
 	else {
-		apsr &= ~0x80000000;
+		cpsr &= ~0x80000000;
 	}
 }
 void Processor::set_z_flag(BOOL val) {
 	if (val) {
-		apsr |= 0x40000000;
+		cpsr |= 0x40000000;
 	}
 	else {
-		apsr &= ~0x40000000;
+		cpsr &= ~0x40000000;
 	}
 }
 BOOL Processor::get_z_flag() {
-	return apsr & 0x40000000;
+	return cpsr & 0x40000000;
 }
 BOOL Processor::get_c_flag() {
-	return apsr & 0x20000000;
+	return cpsr & 0x20000000;
 }
 BOOL Processor::get_n_flag() {
-	return apsr &= 0x80000000;
+	return cpsr &= 0x80000000;
 }
 void Processor::set_v_flag(BOOL val) {
 	if (val) {
-		apsr |= 0x10000000;
+		cpsr |= 0x10000000;
 	}
 	else {
-		apsr &= ~0x10000000;
+		cpsr &= ~0x10000000;
 	}
 }
 BOOL Processor::get_v_flag() {
-	return apsr & 0x10000000;
+	return cpsr & 0x10000000;
 }
-
 void Processor::set_t_bit(BOOL val) {
 	if (val) {
-		epsr |= 0x01000000;
+		cpsr |= 0x00000020;
 	}
 	else {
-		epsr &= ~0x01000000;
+		cpsr &= ~0x00000020;
 	}
 }
+
 BOOL Processor::ConditionPassed(DWORD cond) {
 	if (cond == 0) // EQ
 		return get_z_flag();
@@ -359,6 +359,14 @@ BOOL Processor::ConditionPassed(DWORD cond) {
 		return false;
 	}
 }
+BOOL Processor::InAPrivilegedMode() {
+	return ((cpsr & 0x1F) != 0b10000);
+}
+BOOL Processor::CurrentModeHasSPSR() {
+	DWORD m = (cpsr & 0x1F);
+	return (m != 0b10000 && m != 0b11111);
+}
+
 int Processor::arm_step() {
 	/* Delegate the instruction to whichever encoding it belongs to */
 	DWORD instr = mem->get_u32(r[15]);
@@ -844,7 +852,17 @@ BOOL Processor::load_store_to_from_stack(DWORD instr) {
 	}
 	return true; 
 }
-BOOL Processor::add_to_sp_or_pc(DWORD) { return false; }
+BOOL Processor::add_to_sp_or_pc(DWORD instr) { 
+	DWORD Rd = (instr >> 8) & 0x7;
+	DWORD immed_8 = (instr & 0xFF);
+	if ((instr >> 11) & 0x1) { /* ADD (6) */
+		r[Rd] = r[13] + (immed_8 << 2);
+	}
+	else { /* ADD (5) */
+		r[Rd] = ((r[15] + 4) & 0xFFFFFFFC) + (immed_8 * 4);
+	}
+	return true;
+}
 BOOL Processor::miscellaneous(DWORD instr) {
 	if ((instr & 0x0600) == 0x0400) {
 		/* Push/pop register list */
@@ -970,7 +988,7 @@ BOOL Processor::conditional_branch(DWORD instr) {
 BOOL Processor::undefined_instruction(DWORD) { return false; }
 BOOL Processor::software_interrupt(DWORD) { return false; }
 BOOL Processor::unconditional_branch(DWORD instr) { 
-	DWORD signed_immed_11 = instr & 0x07FF;
+	DWORD signed_immed_11 = instr & 0x07FF; /* B (2) */
 	if (signed_immed_11 & 0x0400) {
 		signed_immed_11 |= 0xFFFFFC00;
 	}
@@ -996,15 +1014,16 @@ BOOL Processor::bl_suffix(DWORD instr) {
 }
 int Processor::step() {
 	mem->increment_LT_TIMER();
-	if (epsr & 0x01000000) return thumb_step();
+	if (cpsr & 0x00000020) return thumb_step();
 	else return arm_step();
 }
 void Processor::display_info() {
 	for (int i = 0; i < 16; i++) {
 		std::cout << "r" << i << ": " << std::hex << r[i] << std::endl;
 	}
-	std::cout << "apsr: " << apsr << std::endl;
-	std::cout << "epsr: " << epsr << std::endl << std::dec;
+	std::cout << "INSTRUCTION: " << mem->get_u32(r[15]) << std::endl;
+	std::cout << "cpsr: " << cpsr << std::endl;
+	std::cout << "spsr: " << spsr << std::endl << std::dec;
 }
 
 void Processor::continue_until(DWORD addr) {
@@ -1080,11 +1099,22 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 		}
 		break;
 	case 0xA: /* CMP */
-		alu_out = (Rn == 15) ? r[Rn] + 8 - shifter_operand : r[Rn] - shifter_operand;
-		set_n_flag(alu_out & 0x80000000);
-		set_z_flag(!alu_out);
-		set_c_flag(!BorrowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
-		set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, false));
+		if (ConditionPassed(cond)) {
+			alu_out = (Rn == 15) ? r[Rn] + 8 - shifter_operand : r[Rn] - shifter_operand;
+			set_n_flag(alu_out & 0x80000000);
+			set_z_flag(!alu_out);
+			set_c_flag(!BorrowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
+			set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, false));
+		}
+		break;
+	case 0xB: /* CMN */
+		if (ConditionPassed(cond)) {
+			alu_out = (Rn == 15) ? r[Rn] + 8 + shifter_operand : r[Rn] + shifter_operand;
+			set_n_flag(alu_out & 0x80000000);
+			set_z_flag(!alu_out);
+			set_c_flag(CarryFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
+			set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, true));
+		}
 		break;
 	case 0xC: /* ORR */
 		if (ConditionPassed(cond)) {
@@ -1152,12 +1182,73 @@ BOOL Processor::arm_miscellaneous(DWORD instr) {
 			r[15] = (((Rm == 15) ? r[Rm] + 8 : r[Rm]) & 0xFFFFFFFE) - 4;
 		}
 	}
+	else if ((instr & 0x0FF000F0) == 0x01200030) { /* BLX */
+		DWORD cond = (instr >> 28) & 0xF;
+		DWORD Rm = (instr & 0xF);
+		if (ConditionPassed(cond)) {
+			DWORD target = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+			r[14] = r[15] + 4;
+			set_t_bit(target & 0x1);
+			r[15] = (target & 0xFFFFFFFE) - 4;
+		}
+	}
 	else return false;
 	return true;
 }
 BOOL Processor::arm_multiplies_extra_load_stores(DWORD) { return false; }
 BOOL Processor::arm_undefined_instruction(DWORD) { return false; }
-BOOL Processor::arm_move_immediate_to_status_register(DWORD) { return false; }
+BOOL Processor::arm_move_to_status_register(DWORD instr) {
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD R = (instr >> 22) & 0x1;
+	DWORD field_mask = (instr >> 16) & 0xF;
+	DWORD rotate_imm = (instr >> 8) & 0xF;
+	DWORD immed_8 = instr & 0xFF;
+	DWORD Rm = instr & 0xF;
+
+	enum {
+		/* ARM 6 constants */
+		UnallocMask = 0x06F0FC00,
+		UserMask = 0xF80F0200,
+		PrivMask = 0x000001DF,
+		StateMask = 0x01000020,
+	};
+
+	if (ConditionPassed(cond)) {
+		DWORD operand = (instr >> 25) ? rotated_immediate(instr) 
+			: ((Rm == 15) ? r[Rm] + 8 : r[Rm]);
+		if (operand & UnallocMask)
+			throw "Attempt to set reserved bits";
+
+		DWORD byte_mask = 0;
+		if (field_mask & 0x1) byte_mask |= 0x000000FF;
+		if (field_mask & 0x2) byte_mask |= 0x0000FF00;
+		if (field_mask & 0x4) byte_mask |= 0x00FF0000;
+		if (field_mask & 0x8) byte_mask |= 0xFF000000;
+
+		DWORD mask;
+
+		if (R == 0) {
+			if (InAPrivilegedMode())
+				if (operand & StateMask)
+					throw "Attempt to set non-ARM execution state";
+				else
+					mask = byte_mask & (UserMask | PrivMask);
+			else
+				mask = byte_mask & UserMask;
+			cpsr = (cpsr & ~mask) | (operand & mask);
+		} 
+		else {
+			/* R == 1 */
+			if (CurrentModeHasSPSR()) {
+				mask = byte_mask & (UserMask | PrivMask | StateMask);
+				spsr = (spsr & ~mask) | (operand & mask);
+			} 
+			else
+				throw "Attempt to set SPSR in non-exception mode";
+		}
+	}
+	return true;
+}
 BOOL Processor::arm_load_store(DWORD instr) { 
 	DWORD cond = (instr >> 28) & 0xF;
 	DWORD I = (instr >> 25) & 0x1;

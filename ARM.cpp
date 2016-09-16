@@ -7,51 +7,37 @@
 #include "AES.h"
 #include "SHA.h"
 
-int ReadFileIntoMemory(PhysicalMemory *mem, LPCWSTR path_to_file, DWORD load_address) {
-	HANDLE hFile;
-	DWORD file_size;
-	DWORD bytes_read;
-
-	hFile = CreateFileW(path_to_file,
-		GENERIC_READ, 7, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-
-	if (hFile == INVALID_HANDLE_VALUE) {
-		std::cerr << "Failed to open boot0.bin" << std::endl;
-		return 1;
-	}
-
-	file_size = GetFileSize(hFile, NULL);
-
-	mem->add_segment(load_address, file_size);
-
-	ReadFile(hFile, mem->get_buffer(load_address), file_size, &bytes_read, NULL);
-
-	if (bytes_read != file_size) {
-		std::cerr << "Not all bytes could be read from the file" << std::endl;
-		return 2;
-	}
-
-	CloseHandle(hFile);
-	return 0;
-}
-
 int main()
 {
 	PhysicalMemory mem;
-	ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\jajaj.bin", 0x0D4100A0); /* boot0 */
-	//ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\kernel_sram.bin", 0xFFFF0000); /* kernel_sram */
-	mem.add_segment(0x0D800000, 0x6880); /* GPIO */
-	mem.add_segment(new AesSegment(0x0D020000)); /* AES */
-	mem.add_segment(new ShaSegment(0x0D030000)); /* SHA */
-	//mem.add_segment(0x08150000, 0x081B1234 - 0x08150000); /* kernel stuff */
-	//ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\ios_usb_1.bin", 0x10100000); /* IOS_USB */
-	//ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\ios_usb_2.bin", 0x10140000); /* IOS_USB */
-	//ReadFileIntoMemory(&mem, L"C:\\Users\\Andy\\Desktop\\ios_usb_3.bin", 0x10145000); /* IOS_USB */
-	//mem.add_segment(0x10146000, 0x104BD2C8 - 0x10146000); /* IOS_USB */
+
+	ELFIO::elfio reader;
+	reader.load("C:\\Users\\Andy\\Desktop\\fw.img.dec");
+
+	// Print ELF file segments info
+	ELFIO::Elf_Half seg_num = reader.segments.size();
+	for (int i = seg_num-1; i >= 0; --i) {
+		const ELFIO::segment* pseg = reader.segments[i];
+		if (pseg->get_type() != PT_LOAD) continue;
+		if (i == 2) continue;
+		mem.add_segment(pseg->get_physical_address(), pseg->get_memory_size());
+		memcpy(mem.get_buffer(pseg->get_physical_address()), pseg->get_data(), pseg->get_file_size());
+	}
+
+	mem.add_segment(0x0D010000, 0x34); // NAND
+	mem.add_segment(0x0D800000, 0x0D806880 - 0x0D800000); // GPIO
+	mem.add_segment(0x0D8B0000, 0x0D8B46A0 - 0x0D8B0000); // DRAMctrl
+
+	/*mem.add_segment(new AesSegment(0x0D020000));
+	mem.add_segment(new ShaSegment(0x0D030000)); */
+
 	mem.clear_LT_TIMER();
 
-	Processor cpu(&mem, 0x0D4100A0);
+	Processor cpu(&mem, 0xFFFF0060);
+	cpu.continue_until(0xFFFF005C);
 	while (true) {
+		cpu.display_info();
+		system("pause");
 		cpu.step();
 	}
     return 0;

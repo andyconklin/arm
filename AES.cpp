@@ -9,6 +9,7 @@ AesSegment::AesSegment(DWORD addr) : Segment(addr, 0x14) {
 	}
 }
 DWORD AesSegment::get_u32(DWORD addr) {
+	std::cout << "Reading from AES: " << std::hex << addr << std::dec << std::endl;
 	return Segment::get_u32(addr);
 }
 void AesSegment::set_AES_CTRL(DWORD val) {
