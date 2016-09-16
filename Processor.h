@@ -3,11 +3,30 @@
 #include "stdafx.h"
 #include "PhysicalMemory.h"
 
-class Processor {
+class Registers {
 	DWORD r[16];
+	DWORD svc[3];
+	DWORD abt[3];
+	DWORD und[3];
+	DWORD irq[3];
+	DWORD fiq[8];
+	DWORD cpsr = 0x1F;
+	enum {
+		USRMode = 0b10000,
+		FIQMode = 0b10001,
+		IRQMode = 0b10010,
+		SVCMode = 0b10011,
+		ABTMode = 0b10111,
+		UNDMode = 0b11011,
+		SYSMode = 0b11111,
+	};
+public:
+	DWORD& operator[] (DWORD index);
+};
+
+class Processor {
+	Registers r;
 	DWORD cp15 = 0xDEADC0DE;
-	DWORD cpsr = 0;
-	DWORD spsr = 0;
 	PhysicalMemory *mem;
 
 	BOOL InAPrivilegedMode();
@@ -170,7 +189,7 @@ class Processor {
 			&Processor::arm_miscellaneous
 		},
 		{
-			[](DWORD instr) { return COND1(instr) && (instr & 0x0E900090) == 0x00000090; },
+			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000090) == 0x00000090; },
 			&Processor::arm_multiplies_extra_load_stores
 		},
 		{
@@ -233,6 +252,7 @@ class Processor {
 
 	DWORD addressing_mode_1(DWORD instr);
 	DWORD addressing_mode_2(DWORD instr);
+	DWORD addressing_mode_3(DWORD instr);
 	std::pair<DWORD, DWORD> addressing_mode_4(DWORD instr);
 	void set_c_flag(BOOL val);
 	void set_n_flag(BOOL val);

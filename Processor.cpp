@@ -35,6 +35,51 @@ namespace {
 	}
 };
 
+#define CPSR r[16]
+#define SPSR r[17]
+
+/* r[16] = cpsr and r[17] = spsr */
+DWORD& Registers::operator[](DWORD index) {
+	if (index > 17) throw "non-existent register";
+	if (index == 15) return r[15];
+	if (index == 16) return cpsr;
+	switch (cpsr & 0x1F) {
+	case USRMode:
+	case SYSMode:
+		if (index == 17)
+			throw "not an exception mode: no spsr access";
+		else return r[index];
+		break;
+	case SVCMode:
+		if (index == 17) return svc[2];
+		else if (index == 13 || index == 14) return svc[index - 13];
+		else return r[index];
+		break;
+	case ABTMode:
+		if (index == 17) return abt[2];
+		else if (index == 13 || index == 14) return abt[index - 13];
+		else return r[index];
+		break;
+	case UNDMode:
+		if (index == 17) return und[2];
+		else if (index == 13 || index == 14) return und[index - 13];
+		else return r[index];
+		break;
+	case IRQMode:
+		if (index == 17) return irq[2];
+		else if (index == 13 || index == 14) return irq[index - 13];
+		else return r[index];
+		break;
+	case FIQMode:
+		if (index == 17) return fiq[7];
+		else if (index > 7) return fiq[index - 7];
+		else return r[index];
+		break;
+	default:
+		throw "corrupt mode";
+	}
+}
+
 DWORD Processor::addressing_mode_1(DWORD instr) {
 	DWORD I = (instr & 0x02000000) >> 25;
 	DWORD S = (instr & 0x00100000) >> 20;
@@ -222,6 +267,60 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 err:
 	return 0xDEADC0DE;
 }
+DWORD Processor::addressing_mode_3(DWORD instr) {
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD P = (instr >> 24) & 0x1;
+	DWORD U = (instr >> 23) & 0x1;
+	DWORD I = (instr >> 22) & 0x1;
+	DWORD W = (instr >> 21) & 0x1;
+	DWORD L = (instr >> 21) & 0x1;
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD Rd = (instr >> 12) & 0xF;
+	DWORD immedH = (instr >> 8) & 0xF;
+	DWORD S = (instr >> 6) & 0x1;
+	DWORD H = (instr >> 5) & 0x1;
+	DWORD Rm = instr & 0xF, immedL = Rm;
+
+	DWORD Rnadj = (Rn == 15) ? r[Rn] + 8 : r[Rn];
+	DWORD Rmadj = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+
+	if (P && I && !W) {
+		DWORD offset_8 = (immedH << 4) | immedL;
+		if (U) return Rnadj + offset_8;
+		else return Rnadj - offset_8;
+	}
+	else if (P && !I && !W) {
+		if (U) return Rnadj + Rmadj;
+		else return Rnadj - Rmadj;
+	}
+	else if (P && I && W) {
+		DWORD offset_8 = (immedH << 4) | immedL;
+		DWORD address = (U) ? Rnadj + offset_8 : Rnadj - offset_8;
+		if (ConditionPassed(cond))
+			r[Rn] = address;
+		return address;
+	}
+	else if (P && !I && W) {
+		DWORD address = (U) ? Rnadj + Rmadj : Rnadj - Rmadj;
+		if (ConditionPassed(cond))
+			r[Rn] = address;
+		return address;
+	}
+	else if (!P && I && W) {
+		DWORD address = Rnadj;
+		DWORD offset_8 = (immedH << 4) | immedL;
+		if (ConditionPassed(cond))
+			r[Rn] = (U) ? Rnadj + offset_8 : Rnadj - offset_8;
+		return address;
+	}
+	else if (!P && !I && !W) {
+		DWORD address = Rnadj;
+		if (ConditionPassed(cond))
+			r[Rn] = (U) ? Rnadj + Rmadj : Rnadj - Rmadj;
+		return address;
+	}
+	throw "I don't understand the address";
+}
 std::pair<DWORD,DWORD> Processor::addressing_mode_4(DWORD instr) {
 	DWORD cond = (instr >> 28) & 0xF;
 	DWORD P = (instr >> 24) & 0x1;
@@ -267,59 +366,60 @@ std::pair<DWORD,DWORD> Processor::addressing_mode_4(DWORD instr) {
 	}
 	return { start_address, end_address };
 }
+
 Processor::Processor(PhysicalMemory *mem, DWORD start_addr) : mem(mem) {
 	r[15] = start_addr; 
 }
 void Processor::set_c_flag(BOOL val) {
 	if (val) {
-		cpsr |= 0x20000000;
+		CPSR |= 0x20000000;
 	}
 	else {
-		cpsr &= ~0x20000000;
+		CPSR &= ~0x20000000;
 	}
 }
 void Processor::set_n_flag(BOOL val) {
 	if (val) {
-		cpsr |= 0x80000000;
+		CPSR |= 0x80000000;
 	}
 	else {
-		cpsr &= ~0x80000000;
+		CPSR &= ~0x80000000;
 	}
 }
 void Processor::set_z_flag(BOOL val) {
 	if (val) {
-		cpsr |= 0x40000000;
+		CPSR |= 0x40000000;
 	}
 	else {
-		cpsr &= ~0x40000000;
+		CPSR &= ~0x40000000;
 	}
 }
 BOOL Processor::get_z_flag() {
-	return cpsr & 0x40000000;
+	return CPSR & 0x40000000;
 }
 BOOL Processor::get_c_flag() {
-	return cpsr & 0x20000000;
+	return CPSR & 0x20000000;
 }
 BOOL Processor::get_n_flag() {
-	return cpsr &= 0x80000000;
+	return CPSR &= 0x80000000;
 }
 void Processor::set_v_flag(BOOL val) {
 	if (val) {
-		cpsr |= 0x10000000;
+		CPSR |= 0x10000000;
 	}
 	else {
-		cpsr &= ~0x10000000;
+		CPSR &= ~0x10000000;
 	}
 }
 BOOL Processor::get_v_flag() {
-	return cpsr & 0x10000000;
+	return CPSR & 0x10000000;
 }
 void Processor::set_t_bit(BOOL val) {
 	if (val) {
-		cpsr |= 0x00000020;
+		CPSR |= 0x00000020;
 	}
 	else {
-		cpsr &= ~0x00000020;
+		CPSR &= ~0x00000020;
 	}
 }
 
@@ -360,10 +460,10 @@ BOOL Processor::ConditionPassed(DWORD cond) {
 	}
 }
 BOOL Processor::InAPrivilegedMode() {
-	return ((cpsr & 0x1F) != 0b10000);
+	return ((CPSR & 0x1F) != 0b10000);
 }
 BOOL Processor::CurrentModeHasSPSR() {
-	DWORD m = (cpsr & 0x1F);
+	DWORD m = (CPSR & 0x1F);
 	return (m != 0b10000 && m != 0b11111);
 }
 
@@ -1012,9 +1112,10 @@ BOOL Processor::bl_suffix(DWORD instr) {
 	r[14] = address_of_next_instruction | 1;
 	return true;
 }
+
 int Processor::step() {
 	mem->increment_LT_TIMER();
-	if (cpsr & 0x00000020) return thumb_step();
+	if (CPSR & 0x00000020) return thumb_step();
 	else return arm_step();
 }
 void Processor::display_info() {
@@ -1022,10 +1123,14 @@ void Processor::display_info() {
 		std::cout << "r" << i << ": " << std::hex << r[i] << std::endl;
 	}
 	std::cout << "INSTRUCTION: " << mem->get_u32(r[15]) << std::endl;
-	std::cout << "cpsr: " << cpsr << std::endl;
-	std::cout << "spsr: " << spsr << std::endl << std::dec;
+	std::cout << "cpsr: " << CPSR << std::endl;
+	if (CurrentModeHasSPSR()) {
+		std::cout << "spsr: " << SPSR << std::endl << std::dec;
+	}
+	else {
+		std::cout << "spsr: " << "NOT AN EXCEPTION MODE" << std::endl << std::dec;
+	}
 }
-
 void Processor::continue_until(DWORD addr) {
 	while (r[15] != addr) step();
 }
@@ -1041,13 +1146,13 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 	DWORD alu_out = 0;
 
 	switch (opcode) {
-	case 0x0:
+	case 0x0: /* AND */
 		if (ConditionPassed(cond)) {
 			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) & shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-				     CPSR = SPSR
-				   else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1195,7 +1300,48 @@ BOOL Processor::arm_miscellaneous(DWORD instr) {
 	else return false;
 	return true;
 }
-BOOL Processor::arm_multiplies_extra_load_stores(DWORD) { return false; }
+BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) { 
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD P = (instr >> 24) & 0x1;
+	DWORD U = (instr >> 23) & 0x1;
+	DWORD I = (instr >> 22) & 0x1;
+	DWORD W = (instr >> 21) & 0x1;
+	DWORD L = (instr >> 20) & 0x1;
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD Rd = (instr >> 12) & 0xF;
+	DWORD S = (instr >> 6) & 0x1;
+	DWORD H = (instr >> 5) & 0x1;
+	DWORD address = addressing_mode_3(instr);
+
+	if (!L && !S && H) {
+		if (ConditionPassed(cond)) {
+			//if (CP15_reg1_Ubit == 0) then
+			//	if address[0] == 0b0 then
+			//		Memory[address, 2] = Rd[15:0]
+			//	else
+			//		Memory[address, 2] = UNPREDICTABLE
+			//else /* CP15_reg1_Ubit ==1 */
+			mem->set_u16(address, r[Rd] & 0xFF);
+			//if Shared(address) then /* ARMv6 */
+			//	physical_address = TLB(address)
+			//	ClearExclusiveByAddress(physical_address, processor_id, 2)
+			//	/* See Summary of operation on page A2-49 */
+		}
+	}
+	else if (L && !S && H) {
+		if (ConditionPassed(cond)) {
+			//if (CP15_reg1_Ubit == 0) then
+			//	if address[0] == 0 then
+			//		data = Memory[address, 2]
+			//	else
+			//		data = UNPREDICTABLE
+			//else /* CP15_reg1_Ubit == 1 */
+			r[Rd] = mem->get_u16(address);
+		}
+	}
+	else return false;
+	return true;
+}
 BOOL Processor::arm_undefined_instruction(DWORD) { return false; }
 BOOL Processor::arm_move_to_status_register(DWORD instr) {
 	DWORD cond = (instr >> 28) & 0xF;
@@ -1235,13 +1381,13 @@ BOOL Processor::arm_move_to_status_register(DWORD instr) {
 					mask = byte_mask & (UserMask | PrivMask);
 			else
 				mask = byte_mask & UserMask;
-			cpsr = (cpsr & ~mask) | (operand & mask);
+			CPSR = (CPSR & ~mask) | (operand & mask);
 		} 
 		else {
 			/* R == 1 */
 			if (CurrentModeHasSPSR()) {
 				mask = byte_mask & (UserMask | PrivMask | StateMask);
-				spsr = (spsr & ~mask) | (operand & mask);
+				SPSR = (SPSR & ~mask) | (operand & mask);
 			} 
 			else
 				throw "Attempt to set SPSR in non-exception mode";

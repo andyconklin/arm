@@ -34,7 +34,7 @@ int main()
 	mem.clear_LT_TIMER();
 
 	Processor cpu(&mem, 0xFFFF0060);
-	cpu.continue_until(0xFFFF005C);
+	cpu.continue_until(0xFFFF009C);
 	while (true) {
 		cpu.display_info();
 		system("pause");
