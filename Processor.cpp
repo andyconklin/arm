@@ -11,6 +11,11 @@ namespace {
 		DWORD ans = (imm >> rot) | (imm << ((~rot + 1) & 0x1F));
 		return ans;
 	}
+
+	DWORD inline rotate_right(DWORD val, DWORD shift) {
+		return (val >> shift) | (val << ((~shift + 1) & 0x1F));
+	}
+
 	DWORD inline popcnt(DWORD i) {
 		i = i - ((i >> 1) & 0x55555555);
 		i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
@@ -81,132 +86,164 @@ DWORD& Registers::operator[](DWORD index) {
 }
 
 DWORD Processor::addressing_mode_1(DWORD instr) {
-	DWORD I = (instr & 0x02000000) >> 25;
-	DWORD S = (instr & 0x00100000) >> 20;
-	DWORD Rn = (instr & 0x000F0000) >> 16;
-	DWORD Rd = (instr & 0x0000F000) >> 12;
-	DWORD shifter_operand;
-	if (I) {
+	DWORD cond = (instr >> 28) & 0xF;
+	DWORD opcode = (instr >> 21) & 0xF;
+	DWORD S = (instr >> 20) & 0x1;
+	DWORD Rn = (instr >> 16) & 0xF;
+	DWORD Rd = (instr >> 12) & 0xF;
+	DWORD three = (instr >> 25) & 0x7;
+	DWORD rotate_imm = (instr >> 8) & 0xF;
+	DWORD immed_8 = instr & 0xFF;
+	DWORD Rm = instr & 0xF;
+	DWORD shifter_operand = rotated_immediate(instr);
+	DWORD shift_imm = (instr >> 7) & 0x1F;
+	DWORD Rs = (instr >> 8) & 0xF;
+
+	DWORD Rmadj = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+	DWORD Rnadj = (Rn == 15) ? r[Rn] + 8 : r[Rn];
+
+	if (three == 0b001) { 
+		/* Data processing operands - immediate */
 		shifter_operand = rotated_immediate(instr);
-		if (!((instr >> 8) & 0xF))
+		if (rotate_imm == 0)
 			shifter_carry_out = get_c_flag();
 		else
-			shifter_carry_out = (shifter_operand & 0x80000000) ? 1 : 0;
+			shifter_carry_out = (shifter_operand >> 31) & 0x1;
 	}
-	else {
-		if ((instr & 0x90) == 0x10) {
-			/* register shifts */
-			DWORD shift = (instr & 0x60) >> 5;
-			DWORD Rm = instr & 0xF;
-			DWORD Rs = (instr & 0xF00) >> 8;
-			if (Rm == 15 || Rm == 15 || Rd == 15 || Rn == 15) {
-				std::cout << "UNPREDICTABLE results." << std::endl;
-				return 0xDEADC0DE;
-			}
-			switch (shift) {
-			case 0:
-				/* LSL */
-				if (!(r[Rs] & 0xFF)) {
-					shifter_operand = r[Rm];
-					shifter_carry_out = get_c_flag();
-				}
-				else if ((r[Rs] & 0xFF) < 32) {
-					shifter_operand = r[Rm] << (r[Rs] & 0xFF);
-					shifter_carry_out = r[Rm] >> (32 - (r[Rs] & 0xFF));
-				}
-				else if ((r[Rs] & 0xFF) == 32) {
-					shifter_operand = 0;
-					shifter_carry_out = r[Rm] & 0x1;
-				}
-				else { /* Rs[7:0] > 32 */
-					shifter_operand = 0;
-					shifter_carry_out = 0;
-				}
-				break;
-			case 1:
-				/* LSR */
-				if ((r[Rs] & 0xFF) == 0) {
-					shifter_operand = r[Rm];
-					shifter_carry_out = get_c_flag();
-				}
-				else if ((r[Rs] & 0xFF) < 32) {
-					shifter_operand = r[Rm] >> (r[Rs] & 0xFF);
-					shifter_carry_out = r[Rm] >> ((r[Rs] & 0xFF) - 1);
-				}
-				else if ((r[Rs] & 0xFF) == 32) {
-					shifter_operand = 0;
-					shifter_carry_out = r[Rm] & 0x80000000;
-				}
-				else /* Rs[7:0] > 32 */ {
-					shifter_operand = 0;
-					shifter_carry_out = 0;
-				}
-				break;
-			case 2:
-				/* ASR */
-				if ((r[Rs] & 0xFF) == 0) {
-					shifter_operand = r[Rm];
-					shifter_carry_out = get_c_flag();
-				}
-				else if ((r[Rs] & 0xFF) < 32) {
-					shifter_operand = r[Rm] >> (r[Rs] & 0xFF);
-					if (r[Rm] & 0x80000000)
-						shifter_operand |= (~(1 << (32 - (r[Rs] & 0xFF))) + 1);
-					shifter_carry_out = r[Rm] >> ((r[Rs] & 0xFF) - 1);
-				}
-				else { /* Rs[7:0] >= 32 */
-					if (!(r[Rm] & 0x80000000)) {
-						shifter_operand = 0;
-						shifter_carry_out = r[Rm] & 0x80000000;
-					}
-					else { /* Rm[31] == 1 */
-						shifter_operand = 0xFFFFFFFF;
-						shifter_carry_out = r[Rm] & 0x80000000;
-					}
-				}
-				break;
-			case 3:
-				/* rotate right by register */
-				throw "Eff that!";
-				return 0xDEADC0DE;
-			}
+	else if (three == 0b000 && ((instr >> 4) & 0xFF) == 0) { 
+		/* Data processing operands - register */
+		shifter_operand = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+		shifter_carry_out = get_c_flag();
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0x7) == 0) {
+		/* Data processing operands - logical shift left by immediate */
+		if (shift_imm == 0) {
+			shifter_operand = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+			shifter_carry_out = get_c_flag();
 		}
-		else if ((instr & 0x10) == 0) {
-			/* immediate shifts */
-			DWORD Rm = (instr & 0xF);
-			DWORD shift = (instr & 0x60) >> 5;
-			DWORD shift_imm = (instr & 0xF80) >> 7;
-			switch (shift) {
-			case 0:
-				shifter_operand = r[Rm] << shift_imm;
-				shifter_carry_out = (!shift_imm) ? get_c_flag() : ((r[Rm] >> (32 - shift_imm)) & 0x1);
-				break;
-			case 1:
-				shifter_operand = (shift_imm) ? r[Rm] >> shift_imm : 0;
-				shifter_carry_out = (!shift_imm) ? r[Rm] & 0x80000000 : ((r[Rm] >> (shift_imm - 1)) & 0x1);
-				break;
-			case 2:
-				if (!shift_imm) {
-					shifter_operand = (r[Rm] & 0x80000000) ? 0xFFFFFFFF : 0;
-					shifter_carry_out = r[Rm] & 0x80000000;
-				}
-				else {
-					shifter_operand = r[Rm] >> shift_imm;
-					if (r[Rm] & 0x80000000) {
-						shifter_operand |= (~(1 << (32 - shift_imm)) + 1);
-					}
-					shifter_carry_out = (r[Rm] >> (shift_imm - 1)) & 0x1;
-				}
-				break;
-			case 3:
-				throw "What even is ROR/RRX?";
-				return 0xDEADC0DE;
+		else {
+			shifter_operand = ((Rm == 15) ? r[Rm] + 8 : r[Rm]) << shift_imm;
+			shifter_carry_out = (((Rm == 15) ? r[Rm] + 8 : r[Rm]) >> (32 - shift_imm)) & 0x1;
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0xF) == 1) {
+		/* Data processing operands - logical shift left by register */
+		if (Rd == 15 || Rm == 15 || Rn == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+		if ((r[Rs] & 0xFF) == 0) {
+			shifter_operand = r[Rm];
+			shifter_carry_out = get_c_flag();
+		}
+		else if ((r[Rs] & 0xFF) < 32) {
+			shifter_operand = r[Rm] << (r[Rs] & 0xFF);
+			shifter_carry_out = (r[Rm] >> (32 - (r[Rs] & 0xFF))) & 0x1;
+		}
+		else {
+			shifter_operand = 0;
+			shifter_carry_out = 0;
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0x7) == 0b010) {
+		/* Data processing operands - logical shift right by immediate */
+		if (shift_imm == 0) {
+			shifter_operand = 0;
+			shifter_carry_out = (((Rm == 15) ? r[Rm] + 8 : r[Rm]) >> 31) & 0x1;
+		}
+		else {
+			shifter_operand = ((Rm == 15) ? r[Rm] + 8 : r[Rm]) >> shift_imm;
+			shifter_carry_out = (((Rm == 15) ? r[Rm] + 8 : r[Rm]) >> (shift_imm - 1)) & 0x1;
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0xF) == 0b0011) {
+		/* Data processing operands - logical shift right by register */
+		if (Rd == 15 || Rm == 15 || Rn == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+		if ((r[Rs] & 0xFF) == 0) {
+			shifter_operand = r[Rm];
+			shifter_carry_out = get_c_flag();
+		}
+		else if ((r[Rs] & 0xFF) < 32) {
+			shifter_operand = r[Rm] >> (r[Rs] & 0xFF);
+			shifter_carry_out = (r[Rm] >> ((r[Rs] & 0xFF) - 1)) & 0x1;
+		}
+		else {
+			shifter_operand = 0;
+			shifter_carry_out = 0;
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0x7) == 0b100) {
+		/* Data processing operands - arithmetic shift right by immediate */
+		if (shift_imm == 0) {
+			if (((Rmadj >> 31) & 0x1) == 0) {
+				shifter_operand = 0;
+				shifter_carry_out = (Rmadj >> 31) & 0x1;
+			}
+			else {
+				shifter_operand = 0xFFFFFFFF;
+				shifter_carry_out = (Rmadj >> 31) & 0x1;
 			}
 		}
 		else {
-			std::cout << "This is actually a load/store instruction. FJFJFJF" << std::endl;
-			return 0xDEADC0DE;
+			shifter_operand = Rmadj >> shift_imm;
+			if (Rmadj & 0x80000000)
+				shifter_operand |= (~(1 << (32 - shift_imm)) + 1);
+			shifter_carry_out = (Rmadj >> (shift_imm - 1)) & 0x1;
 		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0xF) == 0b0101) {
+		/* Data processing operands - arithmetic shift right by register */
+		if (Rd == 15 || Rm == 15 || Rn == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+		if ((r[Rs] & 0xFF) == 0) {
+			shifter_operand = r[Rm];
+			shifter_carry_out = get_c_flag();
+		}
+		else if ((r[Rs] & 0xFF) < 32) {
+			shifter_operand = r[Rm] >> shift_imm;
+			if (r[Rm] & 0x80000000)
+				shifter_operand |= (~(1 << (32 - shift_imm)) + 1);
+			shifter_carry_out = (r[Rm] >> ((r[Rs] & 0xFF) - 1)) & 0x1;
+		}
+		else {
+			if ((r[Rm] & 0x80000000) == 0) {
+				shifter_operand = 0;
+				shifter_carry_out = (r[Rm] >> 31) & 0x1;
+			}
+			else {
+				shifter_operand = 0xFFFFFFFF;
+				shifter_carry_out = (r[Rm] >> 31) & 0x1;
+			}
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0x7) == 0b110 && shift_imm != 0) {
+		/* Data processing operands - rotate right by immediate */
+		shifter_operand = rotate_right(Rmadj, shift_imm);
+		shifter_carry_out = (Rmadj >> (shift_imm - 1)) & 0x1;
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0xF) == 0b0111) {
+		/* Data processing operands - rotate right by register */
+		if (Rd == 15 || Rm == 15 || Rn == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+		if ((r[Rs] & 0xFF) == 0) {
+			shifter_operand = r[Rm];
+			shifter_carry_out = get_c_flag();
+		}
+		else if ((r[Rs] & 0x1F) == 0) {
+			shifter_operand = r[Rm];
+			shifter_carry_out = (r[Rm] >> 31) & 0x1;
+		}
+		else {
+			shifter_operand = rotate_right(r[Rm], r[Rs] & 0x1F);
+			shifter_carry_out = (r[Rm] >> ((r[Rs] & 0x1F) - 1)) & 0x1;
+		}
+	}
+	else if (three == 0b000 && ((instr >> 4) & 0xFF) == 0b00000110) {
+		/* Data processing operands - rotate right with extend */
+		shifter_operand = ((get_c_flag() ? 1 : 0) << 31) | (Rmadj >> 1);
+		shifter_carry_out = Rmadj & 0x1;
+	}
+	else {
+		throw "Unrecognized addressing mode";
 	}
 	return shifter_operand;
 }
