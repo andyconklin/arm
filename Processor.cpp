@@ -265,7 +265,7 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	DWORD Rn = (instr >> 16) & 0xF;
 	DWORD Rd = (instr >> 12) & 0xF;
 	DWORD Rm = instr & 0xF;
-	DWORD offset_12 = instr & 0xFF;
+	DWORD offset_12 = instr & 0xFFF;
 
 	DWORD shift = (instr >> 5) & 0x3;
 	DWORD shift_imm = (instr >> 7) & 0x1F;
@@ -277,19 +277,16 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	DWORD index = 0;
 
 	if (((instr >> 25) & 0x7) == 0b010 && P && !W) {
-		std::cout << "A" << std::endl;
 		if (U) address = Rnadj + offset_12;
 		else address = Rnadj - offset_12;
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && P && !W && ((instr >> 4) & 0xFF) == 0) {
 		if (Rm == 15) throw "UNPREDICTABLE";
-		std::cout << "B" << std::endl;
 		if (U) address = Rnadj + r[Rm];
 		else address = Rnadj - r[Rm];
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && P && !W && !((instr >> 4) & 0x1)) {
 		if (Rm == 15) throw "UNPREDICTABLE";
-		std::cout << "C" << std::endl;
 		switch (shift) {
 		case 0b00:
 			index = r[Rm] << shift_imm;
@@ -321,7 +318,6 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	}
 	else if (((instr >> 25) & 0x7) == 0b010 && P && W) {
 		if (Rn == 15) throw "UNPREDICTABLE";
-		std::cout << "D" << std::endl;
 		if (U)
 			address = r[Rn] + offset_12;
 		else
@@ -331,7 +327,6 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && P && W && ((instr >> 4) & 0xFF) == 0) {
 		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
-		std::cout << "E" << std::endl;
 		if (U)
 			address = r[Rn] + r[Rm];
 		else
@@ -341,7 +336,6 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && P && W && ((instr >> 4) & 0x1) == 0) {
 		if (Rn == 15) throw "UNPREDICTABLE";
-		std::cout << "F" << std::endl;
 		switch (shift) {
 		case 0b00:
 			index = r[Rm] << shift_imm;
@@ -377,7 +371,6 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	}
 	else if (((instr >> 25) & 0x7) == 0b010 && !P && !W) {
 		if (Rn == 15) throw "UNPREDICTABLE";
-		std::cout << "G" << std::endl;
 		address = r[Rn];
 		if (ConditionPassed(cond))
 			if (U)
@@ -387,19 +380,15 @@ DWORD Processor::addressing_mode_2(DWORD instr) {
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && !P && !W && ((instr >> 4) & 0xFF) == 0) {
 		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
-		std::cout << "H" << std::endl;
 		address = r[Rn];
 		if (ConditionPassed(cond))
-			if (U) {
+			if (U)
 				r[Rn] = r[Rn] + r[Rm];
-				std::cout << "Ayyyoooo " << r[Rm] << std::endl;
-			}
 			else
 				r[Rn] = r[Rn] - r[Rm];
 	}
 	else if (((instr >> 25) & 0x7) == 0b011 && !P && !W && ((instr >> 4) & 0x1) == 0) {
 		if (Rn == 15 || Rm == 15) throw "UNPREDICTABLE";
-		std::cout << "I" << std::endl;
 		address = r[Rn];
 		switch (shift) {
 		case 0b00:
@@ -1577,7 +1566,6 @@ BOOL Processor::arm_load_store(DWORD instr) {
 	DWORD immediate = (instr & 0xFFF);
 	DWORD address = addressing_mode_2(instr);
 	DWORD data = 0;
-
 	if (ConditionPassed(cond)) {
 		if (L) {
 			if (!B) {
@@ -1585,7 +1573,7 @@ BOOL Processor::arm_load_store(DWORD instr) {
 				data = mem->get_u32(address);
 				if (Rd == 15) {
 					r[15] = data & 0xFFFFFFFE;
-					set_t_bit(data & 0x80000000);
+					set_t_bit(data & 0x1);
 				}
 				else {
 					r[Rd] = data;
