@@ -143,6 +143,9 @@ void PhysicalMemory::add_segment(DWORD addr, DWORD size) {
 void PhysicalMemory::add_segment(DWORD addr, DWORD size, DWORD file_size) {
 	segments.push_back(new Segment(addr, size, file_size));
 }
+void PhysicalMemory::watch(DWORD addr, DWORD size) {
+	watchlist.push_back({ addr, size });
+}
 Segment& PhysicalMemory::find_segment(DWORD addr) {
 	for (DWORD i = 0; i < segments.size(); i++) {
 		if (segments[i]->addr <= addr && addr < segments[i]->addr + segments[i]->size)
@@ -154,18 +157,27 @@ DWORD PhysicalMemory::get_u32(DWORD addr) {
 	return find_segment(addr).get_u32(addr);
 }
 void PhysicalMemory::set_u32(DWORD addr, DWORD val) {
+	for (int i = 0; i < watchlist.size(); i++)
+		if (watchlist[i].first <= addr && addr < watchlist[i].first + watchlist[i].second)
+			std::cout << "Writing 0x" << std::hex << val << " to 0x" << addr << std::dec << std::endl;
 	return find_segment(addr).set_u32(addr, val);
 }
 WORD PhysicalMemory::get_u16(DWORD addr) {
 	return find_segment(addr).get_u16(addr);
 }
 void PhysicalMemory::set_u16(DWORD addr, WORD val) {
+	for (int i = 0; i < watchlist.size(); i++)
+		if (watchlist[i].first <= addr && addr < watchlist[i].first + watchlist[i].second)
+			std::cout << "Writing 0x" << std::hex << val << " to 0x" << addr << std::dec << std::endl;
 	return find_segment(addr).set_u16(addr, val);
 }
 BYTE PhysicalMemory::get_u8(DWORD addr) {
 	return find_segment(addr).get_u8(addr);
 }
 void PhysicalMemory::set_u8(DWORD addr, BYTE val) {
+	for (int i = 0; i < watchlist.size(); i++)
+		if (watchlist[i].first <= addr && addr < watchlist[i].first + watchlist[i].second)
+			std::cout << "Writing 0x" << std::hex << val << " to 0x" << addr << std::dec << std::endl;
 	return find_segment(addr).set_u8(addr, val);
 }
 void PhysicalMemory::add_segment(Segment *s) {

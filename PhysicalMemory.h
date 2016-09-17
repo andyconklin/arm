@@ -21,8 +21,10 @@ public:
 
 class PhysicalMemory {
 	std::vector<Segment *> segments;
+	std::vector<std::pair<DWORD, DWORD> > watchlist;
 public:
 	~PhysicalMemory();
+	void watch(DWORD addr, DWORD size);
 	void add_segment(DWORD addr, DWORD size);
 	void add_segment(DWORD addr, DWORD size, DWORD file_size);
 	void add_segment(Segment *s);

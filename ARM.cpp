@@ -24,6 +24,12 @@ int main()
 		memcpy(mem.get_buffer(pseg->get_physical_address()), pseg->get_data(), pseg->get_file_size());
 	}
 
+	/* Patch the function spDrvMemFgConfigureClient to return immediately 
+	   because I can't figure out what it does and it's probably not relevant 
+	   to my interests anyway. */
+	mem.set_u32(0x08130D2C, 0xE3A00000);
+	mem.set_u32(0x08130D30, 0xE12FFF1E);
+
 	mem.add_segment(0x0D010000, 0x34); // NAND
 	mem.add_segment(0x0D800000, 0x0D806880 - 0x0D800000); // GPIO
 	mem.add_segment(0x0D8B0000, 0x0D8B46A0 - 0x0D8B0000); // DRAMctrl
@@ -40,13 +46,14 @@ int main()
 
 	cpu.continue_until(0xFFFFE860);
 
-	/* Pretend that the memory controller exists and is functional: */
-	mem.set_u16(0x0D8B4228, 0);
-
 	/* Continue until Start_Kernel() */
 	cpu.continue_until(0x08121B18);
 
-	cpu.continue_until(0x08121B54);
+	cpu.continue_until(0x08125310); // after the two KERNEL_MEMSETs
+
+	/* Start watching after the memsets */
+	//mem.watch(0x081A8000, 0x4000); // translation table
+	//mem.watch(0x08156C00, 0x10000); // page table
 
 	while (true) {
 		//cpu.display_info();

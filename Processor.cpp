@@ -1316,6 +1316,10 @@ BOOL Processor::bl_suffix(DWORD instr) {
 }
 
 int Processor::step() {
+	/* Pretend that the memory controller exists
+	   so that we don't have to wait forever */
+	if (r[15] == 0x08131AF8)
+		mem->set_u16(0x0D8B4228, 0);
 	mem->increment_LT_TIMER();
 	if (CPSR & 0x00000020) return thumb_step();
 	else return arm_step();
@@ -1324,7 +1328,6 @@ void Processor::display_info() {
 	for (int i = 0; i < 16; i++) {
 		std::cout << "r" << i << ": " << std::hex << r[i] << std::endl;
 	}
-	std::cout << "INSTRUCTION: " << mem->get_u32(r[15]) << std::endl;
 	std::cout << "cpsr: " << CPSR << std::endl;
 	if (CurrentModeHasSPSR()) {
 		std::cout << "spsr: " << SPSR << std::endl << std::dec;
@@ -1423,6 +1426,36 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 				set_z_flag(!r[Rd]);
 				set_c_flag(CarryFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand));
 				set_v_flag(OverflowFrom((Rn == 15) ? r[Rn] + 8 : r[Rn], shifter_operand, true));
+			}
+		}
+		break;
+	case 0x5: /* ADC */
+		if (ConditionPassed(cond)) {
+			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) + shifter_operand + (get_c_flag() ? 1 : 0);
+			if (S && Rd == 15)
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
+			else if (S) {
+				set_n_flag(Rd & 0x80000000);
+				set_z_flag(!r[Rd]);
+				set_c_flag(CarryFrom(r[Rn], shifter_operand) | CarryFrom(r[Rn] + shifter_operand, (get_c_flag() ? 1 : 0)));
+				set_v_flag(OverflowFrom(r[Rn], shifter_operand, true) | OverflowFrom(r[Rn] + shifter_operand, (get_c_flag() ? 1 : 0), true));
+			}
+		}
+		break;
+	case 0x7: /* RSC */
+		if (ConditionPassed(cond)) {
+			r[Rd] = shifter_operand - ((Rn == 15) ? r[Rn] + 8 : r[Rn]) - (get_c_flag() ? 0 : 1);
+			if (S && Rd == 15)
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				set_c_flag(!BorrowFrom(shifter_operand, ((Rn == 15) ? r[Rn] + 8 : r[Rn])) && !BorrowFrom(shifter_operand - ((Rn == 15) ? r[Rn] + 8 : r[Rn]), (get_c_flag() ? 0 : 1)));
+				set_v_flag(OverflowFrom(shifter_operand, ((Rn == 15) ? r[Rn] + 8 : r[Rn]), false) | OverflowFrom(shifter_operand - ((Rn == 15) ? r[Rn] + 8 : r[Rn]), (get_c_flag() ? 0 : 1), false));
 			}
 		}
 		break;
@@ -1552,6 +1585,63 @@ BOOL Processor::arm_miscellaneous(DWORD instr) {
 			r[14] = r[15] + 4;
 			set_t_bit(target & 0x1);
 			r[15] = (target & 0xFFFFFFFE) - 4;
+		}
+	}
+	else if ((instr & 0x0FB00000) == 0x01000000) { /* MRS */
+		DWORD cond = (instr >> 28) & 0xF;
+		DWORD R = (instr >> 22) & 0x1;
+		DWORD Rd = (instr >> 12) & 0xF;
+		if (Rd == 15) throw "UNPREDICTABLE";
+		if (ConditionPassed(cond)) {
+			if (R)
+				r[Rd] = SPSR;
+			else
+				r[Rd] = CPSR;
+		}
+	}
+	else if ((instr & 0x0DB00000) == 0x01200000) {
+		DWORD cond = (instr >> 28) & 0xF;
+		DWORD R = (instr >> 22) & 0x1;
+		DWORD field_mask = (instr >> 16) & 0xF;
+		DWORD Rm = instr & 0xF;
+		DWORD operand;
+		enum {
+			UnallocMask = 0x06F0FC00,
+			UserMask = 0xF80F0200,
+			PrivMask = 0x000001DF,
+			StateMask = 0x01000020,
+		};
+		DWORD byte_mask = 0;
+		DWORD mask;
+		if (ConditionPassed(cond)) {
+			if ((instr >> 25) & 1)
+				operand = rotated_immediate(instr);
+			else
+				operand = (Rm == 15) ? r[Rm] + 8 : r[Rm];
+			if ((operand & UnallocMask) != 0)
+				throw "UNPREDICTABLE"; /* Attempt to set reserved bits */
+			if (field_mask & 0x1) byte_mask |= 0x000000FF;
+			if (field_mask & 0x2) byte_mask |= 0x0000FF00;
+			if (field_mask & 0x4) byte_mask |= 0x00FF0000;
+			if (field_mask & 0x8) byte_mask |= 0xFF000000;
+			if (!R) {
+				if (InAPrivilegedMode())
+					if (operand & StateMask)
+						throw "UNPREDICTABLE"; /* Attempt to set non-ARM execution state */
+					else
+						mask = byte_mask & (UserMask | PrivMask);
+				else
+					mask = byte_mask & UserMask;
+				CPSR = (CPSR & ~mask) | (operand & mask);
+			}
+			else {/* R == 1 */
+				if (CurrentModeHasSPSR()) {
+					mask = byte_mask & (UserMask | PrivMask | StateMask);
+					SPSR = (SPSR & ~mask) | (operand & mask);
+				}
+				else
+					throw "UNPREDICTABLE";
+			}
 		}
 	}
 	else return false;
@@ -1835,8 +1925,33 @@ BOOL Processor::arm_coprocessor_register_transfers(DWORD instr) {
 		}
 		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 7 && CRm == 6) {
 			std::cout << "Invalidate entire data cache." << std::endl;
-		} else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 1 && CRm == 0) {
-			std::cout << "TODO: write to control register (c1)." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 8 && CRm == 7) {
+			std::cout << "Invalidate set-associative TLB." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 3 && CRm == 0) {
+			std::cout << "Writing domain access permissions: 0x" << std::hex << r[Rd] << std::dec << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 2 && CRm == 0) {
+			std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to TTBR." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 6 && CRm == 0) {
+			//std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to FAR." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 5 && CRm == 0) {
+			//std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to DFSR." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 1 && CRn == 5 && CRm == 0) {
+			//std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to IFSR." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 1 && CRn == 7 && CRm == 10) {
+			//std::cout << "Clear DCache single entry (MVA): 0x" << std::hex << r[Rd] << std::dec << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 4 && CRn == 7 && CRm == 10) {
+			//std::cout << "Drain write buffer." << std::endl;
+		}
+		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 1 && CRm == 0) {
+			std::cout << "TODO: write to control register: 0x" << std::hex << r[Rd] << std::dec << std::endl;
 		}
 		else return false;
 	}

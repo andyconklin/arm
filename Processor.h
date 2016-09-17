@@ -173,7 +173,7 @@ class Processor {
 	};
 	std::pair<std::function<BOOL(DWORD)>, ProcHandleFn> arm_filters[19] {
 		{
-			[](DWORD instr) { return COND1(instr) && !(instr & 0x0E000010); },
+			[](DWORD instr) { return COND1(instr) && !(instr & 0x0E000010) && (instr & 0x01900000) != 0x01000000;  },
 			&Processor::arm_data_processing
 		},
 		{
@@ -202,7 +202,7 @@ class Processor {
 		},
 		{
 			[](DWORD instr) { return COND1(instr) && (instr & 0x0FB00000) == 0x03200000; },
-			&Processor::arm_move_to_status_register
+			&Processor::arm_miscellaneous
 		},
 		{
 			[](DWORD instr) { return COND1(instr) && (instr & 0x0E000000) == 0x04000000; },
