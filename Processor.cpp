@@ -1244,7 +1244,51 @@ BOOL Processor::conditional_branch(DWORD instr) {
 	return true;
 }
 BOOL Processor::undefined_instruction(DWORD) { return false; }
-BOOL Processor::software_interrupt(DWORD) { return false; }
+BOOL Processor::software_interrupt(DWORD instr) { 
+	DWORD immediate = instr & 0xFF;
+	if (immediate == 0xAB) {
+		/* SEMIHOSTING INTERFACE */
+		if (r[0] == 0x1) { /* SYS_OPEN */
+			DWORD word1 = mem->get_u32(r[1]);
+			DWORD word2 = mem->get_u32(r[1] + 4);
+			DWORD word3 = mem->get_u32(r[1] + 8);
+			DWORD ttname = mem->get_u32(word1);
+			if (ttname != 0x3a747400 || word2 != 0 || word3 != 3)
+				throw "Trying to open something that's not :tt";
+			else
+				r[0] = 0x1234;
+		}
+		else if (r[0] == 0x2) { /* SYS_CLOSE */
+			DWORD word1 = mem->get_u32(r[1]);
+			if (word1 != 0x1234)
+				throw "Trying to close something that's not :tt";
+			r[0] = 0;
+		}
+		else if (r[0] == 0x4) { /* SYS_WRITE0 */
+			char c;
+			for (int i = 0; c = mem->get_u8(r[1] + i); i++)
+				std::cout << c;
+		}
+		else if (r[0] == 0x6) { /* SYS_READ */
+			DWORD word1 = mem->get_u32(r[1]);
+			DWORD word2 = mem->get_u32(r[1] + 4);
+			DWORD word3 = mem->get_u32(r[1] + 8);
+			if (word1 != 0x1234)
+				throw "Trying to read from something that's not :tt";
+			char *buf = new char[word3];
+			std::cin.getline(buf, word3);
+			DWORD chars_read = std::cin.gcount();
+			if (chars_read == word3) r[0] = 0;
+			else r[0] = chars_read;
+			for (int i = 0; i < chars_read; i++)
+				mem->set_u8(word2 + i, buf[i]);
+			delete[] buf;
+		}
+		else return false;
+	}
+	else return false;
+	return true;
+}
 BOOL Processor::unconditional_branch(DWORD instr) { 
 	DWORD signed_immed_11 = instr & 0x07FF; /* B (2) */
 	if (signed_immed_11 & 0x0400) {

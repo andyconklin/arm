@@ -34,6 +34,10 @@ int main()
 	mem.clear_LT_TIMER();
 
 	Processor cpu(&mem, 0xFFFF0060);
+
+	/* Set the LT_DEBUG register */
+	mem.set_u32(0x0D8005A4, 0x80000000);
+
 	cpu.continue_until(0xFFFFE860);
 
 	/* Pretend that the memory controller exists and is functional: */
@@ -42,9 +46,11 @@ int main()
 	/* Continue until Start_Kernel() */
 	cpu.continue_until(0x08121B18);
 
+	cpu.continue_until(0x08121B54);
+
 	while (true) {
-		cpu.display_info();
-		system("pause");
+		//cpu.display_info();
+		//system("pause");
 		cpu.step();
 	}
     return 0;
