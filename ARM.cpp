@@ -34,7 +34,17 @@ int main()
 	mem.clear_LT_TIMER();
 
 	Processor cpu(&mem, 0xFFFF0060);
+	cpu.continue_until(0xFFFFE860);
+
+	/* Pretend that the memory controller exists and is functional: */
+	mem.set_u16(0x0D8B4228, 0);
+
+	/* Continue until Start_Kernel() */
+	cpu.continue_until(0x08121B18);
+
 	while (true) {
+		cpu.display_info();
+		system("pause");
 		cpu.step();
 	}
     return 0;
