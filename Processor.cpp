@@ -559,7 +559,7 @@ BOOL Processor::get_c_flag() {
 	return CPSR & 0x20000000;
 }
 BOOL Processor::get_n_flag() {
-	return CPSR &= 0x80000000;
+	return CPSR & 0x80000000;
 }
 void Processor::set_v_flag(BOOL val) {
 	if (val) {
@@ -1320,13 +1320,28 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			}
 		}
 		break;
+	case 0x1: /* EOR */
+		if (ConditionPassed(cond)) {
+			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) ^ shifter_operand;
+			if (S && Rd == 15)
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
+			}
+		}
+		break;
 	case 0x2:
 		if (ConditionPassed(cond)) {
 			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) - shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-				     CPSR = SPSR
-				   else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1336,13 +1351,28 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			}
 		}
 		break;
+	case 0x3: /* RSB */
+		if (ConditionPassed(cond)) {
+			r[Rd] = shifter_operand - ((Rn == 15) ? r[Rn] + 8 : r[Rn]);
+			if (S && Rd == 15)
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				set_c_flag(!BorrowFrom(shifter_operand, ((Rn == 15) ? r[Rn] + 8 : r[Rn])));
+				set_v_flag(OverflowFrom(shifter_operand, ((Rn == 15) ? r[Rn] + 8 : r[Rn]), false));
+			}
+		}
+		break;
 	case 0x4:
 		if (ConditionPassed(cond)) {
 			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) + shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-				     CPSR = SPSR
-				   else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1352,9 +1382,18 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			}
 		}
 		break;
-	case 0x8:
+	case 0x8: /* TST */
 		if (ConditionPassed(cond)) {
 			alu_out = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) & shifter_operand;
+			set_n_flag(alu_out & 0x80000000);
+			set_z_flag(!alu_out);
+			set_c_flag(shifter_carry_out);
+			/* V flag unaffected. */
+		}
+		break;
+	case 0x9: /* TEQ */
+		if (ConditionPassed(cond)) {
+			alu_out = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) ^ shifter_operand;
 			set_n_flag(alu_out & 0x80000000);
 			set_z_flag(!alu_out);
 			set_c_flag(shifter_carry_out);
@@ -1384,9 +1423,9 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 			if (Rn == 15) r[Rd] = (r[Rn] + 8) | shifter_operand;
 			else r[Rd] = r[Rn] | shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-					CPSR = SPSR
-				else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1400,9 +1439,9 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 		if (ConditionPassed(cond)) {
 			r[Rd] = shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-				     CPSR = SPSR
-				   else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1416,9 +1455,25 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 		if (ConditionPassed(cond)) {
 			r[Rd] = ((Rn == 15) ? r[Rn] + 8 : r[Rn]) & ~shifter_operand;
 			if (S && Rd == 15) {
-				/* if CurrentModeHasSPSR() then
-					CPSR = SPSR
-				else UNPREDICTABLE */
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
+			}
+			else if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				set_c_flag(shifter_carry_out);
+				/* V Flag = unaffected */
+			}
+		}
+		break;
+	case 0xF: /* MVN */
+		if (ConditionPassed(cond)) {
+			r[Rd] = ~shifter_operand;
+			if (S && Rd == 15) {
+				if (CurrentModeHasSPSR())
+					CPSR = SPSR;
+				else throw "UNPREDICTABLE";
 			}
 			else if (S) {
 				set_n_flag(r[Rd] & 0x80000000);
@@ -1429,7 +1484,7 @@ BOOL Processor::arm_data_processing(DWORD instr) {
 		}
 		break;
 	default:
-		throw "Unimplemented ARM instruction: data processing immediate shift";
+		throw "Unimplemented ARM instruction: data processing";
 	}
 
 	if (Rd == 15 && ConditionPassed(cond))
@@ -1471,7 +1526,45 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 	DWORD H = (instr >> 5) & 0x1;
 	DWORD address = addressing_mode_3(instr);
 
-	if (!L && !S && H) {
+	if (!P && !U && !I && !W && !S && !H) { /* MUL */
+		DWORD S = (instr >> 20) & 0x1;
+		DWORD Rd = (instr >> 16) & 0xF;
+		DWORD Rs = (instr >> 8) & 0xF;
+		DWORD Rm = instr & 0xF;
+
+		if (Rd == 15 || Rm == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+		if (ConditionPassed(cond)) {
+			r[Rd] = (r[Rm] * r[Rs]);
+			if (S) {
+				set_n_flag(r[Rd] & 0x80000000);
+				set_z_flag(!r[Rd]);
+				/* C and V unaffected. */
+			}
+		}
+	}
+	else if (!P && U && !I && !W && !S && !H) { /* UMULL  */
+		DWORD S = (instr >> 20) & 0x1;
+		DWORD RdHi = (instr >> 16) & 0xF;
+		DWORD RdLo = (instr >> 12) & 0xF;
+		DWORD Rs = (instr >> 8) & 0xF;
+		DWORD Rm = instr & 0xF;
+
+		if (RdHi == 15 || RdLo == 15 || Rs == 15 || Rm == 15 || RdHi == RdLo)
+			throw "UNPREDICTABLE";
+
+		if (ConditionPassed(cond)) {
+			unsigned __int64 p = ((unsigned __int64)(r[Rm]) * (unsigned __int64)(r[Rs]));
+			r[RdHi] = (DWORD)((p >> 32) & 0xFFFFFFFFLLU);
+			r[RdLo] = (DWORD)(p & 0xFFFFFFFFLLU);
+			if (S) {
+				set_n_flag(r[RdHi] & 0x80000000);
+				set_z_flag((r[RdHi] == 0) && (r[RdLo] == 0));
+				/* C and V unaffected */
+			}
+		}
+	}
+	else if (!L && !S && H) { /* STRH */
 		if (ConditionPassed(cond)) {
 			//if (CP15_reg1_Ubit == 0) then
 			//	if address[0] == 0b0 then
@@ -1486,7 +1579,7 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			//	/* See Summary of operation on page A2-49 */
 		}
 	}
-	else if (L && !S && H) {
+	else if (L && !S && H) { /* LDRH */
 		if (ConditionPassed(cond)) {
 			//if (CP15_reg1_Ubit == 0) then
 			//	if address[0] == 0 then
