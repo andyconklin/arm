@@ -92,6 +92,64 @@ DWORD& Registers::operator[](DWORD index) {
 	}
 }
 
+DWORD Processor::translate(DWORD vaddr) {
+	/* Check whether MMU is enabled */
+	if (!(cp15_c1 & 0x1)) return vaddr;
+	DWORD paddr = 0;
+	DWORD addr = (ttbr & 0xFFFFC000) | (((vaddr >> 20) & 0xFFF) << 2);
+	DWORD descriptor = mem->get_u32(addr);
+	DWORD domain = (descriptor >> 5) & 0xF;
+	if ((descriptor & 0x3) == 0b01) {
+		/* Coarse page table */
+		addr = (descriptor & 0xFFFFFC00) | (((vaddr >> 12) & 0xFF) << 2);
+		descriptor = mem->get_u32(addr);
+		if ((descriptor & 0x3) == 0b10) {
+			/* Small page */
+			/* TODO check domain, AP, TEX bits!!! */
+			paddr = (descriptor & 0xFFFFF000) | (vaddr & 0xFFF);
+		}
+		else if ((descriptor & 0x3) == 0b01) {
+			/* Large page */
+			/* TODO check domain, AP, TEX bits!!! */
+			paddr = (descriptor & 0xFFFF0000) | (vaddr | 0xFFFF);
+		}
+		else
+			throw "??? Unsupported second-level descriptor type";
+	}
+	else if ((descriptor & 0x3) == 0b10) {
+		/* Section */
+		/* TODO check domain, AP, TEX bits!!! */
+		paddr = (descriptor & 0xFFF00000) | (vaddr & 0xFFFFF);
+	}
+	else
+		throw "??? Unsupported first-level descriptor type";
+	return paddr;
+}
+DWORD Processor::get_u32(DWORD vaddr) {
+	DWORD addr = translate(vaddr);
+	return mem->get_u32(addr);
+}
+WORD Processor::get_u16(DWORD vaddr) {
+	DWORD addr = translate(vaddr);
+	return mem->get_u16(addr);
+}
+BYTE Processor::get_u8(DWORD vaddr) {
+	DWORD addr = translate(vaddr);
+	return mem->get_u8(addr);
+}
+void Processor::set_u32(DWORD vaddr, DWORD val) {
+	DWORD addr = translate(vaddr);
+	return mem->set_u32(addr, val);
+}
+void Processor::set_u16(DWORD vaddr, WORD val) {
+	DWORD addr = translate(vaddr);
+	return mem->set_u16(addr, val);
+}
+void Processor::set_u8(DWORD vaddr, BYTE val) {
+	DWORD addr = translate(vaddr);
+	return mem->set_u8(addr, val);
+}
+
 DWORD Processor::addressing_mode_1(DWORD instr) {
 	DWORD cond = (instr >> 28) & 0xF;
 	DWORD opcode = (instr >> 21) & 0xF;
@@ -627,7 +685,7 @@ BOOL Processor::CurrentModeHasSPSR() {
 
 int Processor::arm_step() {
 	/* Delegate the instruction to whichever encoding it belongs to */
-	DWORD instr = mem->get_u32(r[15]);
+	DWORD instr = get_u32(r[15]);
 	DWORD f = 0xFAFA;
 	for (DWORD i = 0; i < 19; i++) {
 		if (arm_filters[i].first(instr)) {
@@ -648,7 +706,7 @@ int Processor::arm_step() {
 }
 int Processor::thumb_step() {
 	/* Delegate the instruction to whichever encoding it belongs to */
-	WORD instr = mem->get_u16(r[15]);
+	WORD instr = get_u16(r[15]);
 	DWORD f = 0xFAFA;
 	for (DWORD i = 0; i < 23; i++) {
 		if (filters[i].first(instr)) {
@@ -975,7 +1033,7 @@ BOOL Processor::load_from_literal_pool(DWORD instr) {
 	DWORD Rd = (instr & 0x0700) >> 8;
 	DWORD immed_8 = (instr & 0x00FF);
 	DWORD address = ((r[15] + 4) & 0xFFFFFFFC) + (immed_8 * 4);
-	r[Rd] = mem->get_u32(address);
+	r[Rd] = get_u32(address);
 	if (Rd == 15) r[Rd] -= 2;
 	return true;
 }
@@ -994,7 +1052,7 @@ BOOL Processor::load_store_register_offset(DWORD instr) {
 		//	else
 		//		data = UNPREDICTABLE
 		//else /* CP15_reg1_Ubit == 1 */
-		data = mem->get_u32(address);
+		data = get_u32(address);
 		r[Rd] = data;
 	}
 	else { /* STR (2) */
@@ -1007,7 +1065,7 @@ BOOL Processor::load_store_register_offset(DWORD instr) {
 		//	else
 		//		Memory[address, 4] = UNPREDICTABLE
 		//else /* CP15_reg1_Ubit == 1 */
-		mem->set_u32(address, r[Rd]);
+		set_u32(address, r[Rd]);
 		//	if Shared(address) then /* from ARMv6 */
 		//		physical_address = TLB(address)
 		//		ClearExclusiveByAddress(physical_address, 4)
@@ -1022,7 +1080,7 @@ BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) {
 		DWORD Rd = (instr & 0x0007);
 		DWORD address = r[Rn] + (immed_5 * 4);
 		if (Rn == 15) address += 4;
-		r[Rd] = mem->get_u32(address);
+		r[Rd] = get_u32(address);
 		if (Rd == 15) r[Rd] -= 2;
 	}
 	else if ((instr & 0xF800) == 0x6000) { /* STR (1) */
@@ -1033,14 +1091,14 @@ BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) {
 		if (Rn == 15) address += 4;
 		DWORD data_to_store = r[Rd];
 		if (Rd == 15) data_to_store += 4;
-		mem->set_u32(address, data_to_store);
+		set_u32(address, data_to_store);
 	}
 	else if ((instr & 0xF800) == 0x7800) { /* LDRB (1) */
 		DWORD immed_5 = (instr & 0x07C0) >> 6;
 		DWORD Rn = (instr & 0x0038) >> 3;
 		DWORD Rd = (instr & 0x0007);
 		DWORD address = r[Rn] + immed_5;
-		r[Rd] = mem->get_u8(address);
+		r[Rd] = get_u8(address);
 	}
 	else if ((instr & 0xF800) == 0x7000) { /* STRB (1) */
 		DWORD immed_5 = (instr & 0x07C0) >> 6;
@@ -1049,7 +1107,7 @@ BOOL Processor::load_store_word_byte_immediate_offset(DWORD instr) {
 		//MemoryAccess(B - bit, E - bit)
 		//processor_id = ExecutingProcessor()
 		DWORD address = r[Rn] + immed_5;
-		mem->set_u8(address, r[Rd] & 0xFF);
+		set_u8(address, r[Rd] & 0xFF);
 		//if Shared(address) then /* from ARMv6 */
 		//	physical_address = TLB(address)
 		//	ClearExclusiveByAddress(physical_address, 1)
@@ -1074,7 +1132,7 @@ BOOL Processor::load_store_halfword_immediate_offset(DWORD instr) {
 		//	else
 		//		data = UNPREDICTABLE
 		//else /* CP15_reg1_Ubit == 1 */
-		DWORD data = mem->get_u16(address);
+		DWORD data = get_u16(address);
 		r[Rd] = data & 0xFFFF;
 	}
 	else { /* STRH (1) */
@@ -1087,7 +1145,7 @@ BOOL Processor::load_store_halfword_immediate_offset(DWORD instr) {
 		//	else
 		//		Memory[address, 2] = UNPREDICTABLE
 		//else /* CP15_reg1_Ubit == 1 */
-		mem->set_u16(address, r[Rd] & 0xFFFF);
+		set_u16(address, r[Rd] & 0xFFFF);
 		//	if Shared(address) then /* from ARMv6 */
 		//		physical_address = TLB(address)
 		//		ClearExclusiveByAddress(physical_address, 2)
@@ -1100,13 +1158,13 @@ BOOL Processor::load_store_to_from_stack(DWORD instr) {
 	DWORD immed_8 = (instr & 0x00FF);
 	if (L) {
 		DWORD address = r[13] + (immed_8 * 4);
-		r[Rd] = mem->get_u32(address);
+		r[Rd] = get_u32(address);
 		if (Rd == 15) r[Rd] -= 2; // can't even be this tbh
 	}
 	else {
 		DWORD address = r[13] + (immed_8 * 4);
 		DWORD d = (Rd == 15) ? r[Rd] + 4 : r[Rd]; // can't even be this tbh
-		mem->set_u32(address, d);
+		set_u32(address, d);
 	}
 	return true; 
 }
@@ -1133,12 +1191,12 @@ BOOL Processor::miscellaneous(DWORD instr) {
 			DWORD address = start_address;
 			for (DWORD i = 0; i < 8; i++) {
 				if (register_list & (1 << i)) {
-					mem->set_u32(address, r[i]);
+					set_u32(address, r[i]);
 					address += 4;
 				}
 			}
 			if (R) {
-				mem->set_u32(address, r[14]);
+				set_u32(address, r[14]);
 				address += 4;
 			}
 			if (end_address != address - 4) {
@@ -1154,13 +1212,13 @@ BOOL Processor::miscellaneous(DWORD instr) {
 
 			for (DWORD i = 0; i < 8; i++) {
 				if (register_list & (1 << i)) {
-					r[i] = mem->get_u32(address);
+					r[i] = get_u32(address);
 					address += 4;
 				}
 			}
 
 			if (R) {
-				DWORD value = mem->get_u32(address);
+				DWORD value = get_u32(address);
 				r[15] = value & 0xFFFFFFFE;
 				set_t_bit(value & 1);
 				address += 4;
@@ -1202,7 +1260,7 @@ BOOL Processor::load_store_multiple(DWORD instr) {
 		DWORD address = start_address;
 		for (int i = 0; i < 8; i++) {
 			if ((register_list >> i) & 0x1) {
-				r[i] = mem->get_u32(address);
+				r[i] = get_u32(address);
 				address += 4;
 			}
 		}
@@ -1218,7 +1276,7 @@ BOOL Processor::load_store_multiple(DWORD instr) {
 		DWORD address = start_address;
 		for (int i = 0; i < 8; i++) {
 			if ((register_list >> i) & 0x1) {
-				mem->set_u32(address, r[i]);
+				set_u32(address, r[i]);
 				//if Shared(address then /* from ARMv6 */
 				//	physical_address = TLB(address
 				//		ClearExclusiveByAddress(physical_address, 4)
@@ -1249,30 +1307,30 @@ BOOL Processor::software_interrupt(DWORD instr) {
 	if (immediate == 0xAB) {
 		/* SEMIHOSTING INTERFACE */
 		if (r[0] == 0x1) { /* SYS_OPEN */
-			DWORD word1 = mem->get_u32(r[1]);
-			DWORD word2 = mem->get_u32(r[1] + 4);
-			DWORD word3 = mem->get_u32(r[1] + 8);
-			DWORD ttname = mem->get_u32(word1);
+			DWORD word1 = get_u32(r[1]);
+			DWORD word2 = get_u32(r[1] + 4);
+			DWORD word3 = get_u32(r[1] + 8);
+			DWORD ttname = get_u32(word1);
 			if (ttname != 0x3a747400 || word2 != 0 || word3 != 3)
 				throw "Trying to open something that's not :tt";
 			else
 				r[0] = 0x1234;
 		}
 		else if (r[0] == 0x2) { /* SYS_CLOSE */
-			DWORD word1 = mem->get_u32(r[1]);
+			DWORD word1 = get_u32(r[1]);
 			if (word1 != 0x1234)
 				throw "Trying to close something that's not :tt";
 			r[0] = 0;
 		}
 		else if (r[0] == 0x4) { /* SYS_WRITE0 */
 			char c;
-			for (int i = 0; c = mem->get_u8(r[1] + i); i++)
+			for (int i = 0; c = get_u8(r[1] + i); i++)
 				std::cout << c;
 		}
 		else if (r[0] == 0x6) { /* SYS_READ */
-			DWORD word1 = mem->get_u32(r[1]);
-			DWORD word2 = mem->get_u32(r[1] + 4);
-			DWORD word3 = mem->get_u32(r[1] + 8);
+			DWORD word1 = get_u32(r[1]);
+			DWORD word2 = get_u32(r[1] + 4);
+			DWORD word3 = get_u32(r[1] + 8);
 			if (word1 != 0x1234)
 				throw "Trying to read from something that's not :tt";
 			char *buf = new char[word3];
@@ -1281,7 +1339,7 @@ BOOL Processor::software_interrupt(DWORD instr) {
 			if (chars_read == word3) r[0] = 0;
 			else r[0] = chars_read;
 			for (int i = 0; i < chars_read; i++)
-				mem->set_u8(word2 + i, buf[i]);
+				set_u8(word2 + i, buf[i]);
 			delete[] buf;
 		}
 		else return false;
@@ -1706,7 +1764,7 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			//	else
 			//		Memory[address, 2] = UNPREDICTABLE
 			//else /* CP15_reg1_Ubit ==1 */
-			mem->set_u16(address, r[Rd] & 0xFF);
+			set_u16(address, r[Rd] & 0xFF);
 			//if Shared(address) then /* ARMv6 */
 			//	physical_address = TLB(address)
 			//	ClearExclusiveByAddress(physical_address, processor_id, 2)
@@ -1721,7 +1779,7 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			//	else
 			//		data = UNPREDICTABLE
 			//else /* CP15_reg1_Ubit == 1 */
-			r[Rd] = mem->get_u16(address);
+			r[Rd] = get_u16(address);
 		}
 	}
 	else return false;
@@ -1797,7 +1855,7 @@ BOOL Processor::arm_load_store(DWORD instr) {
 		if (L) {
 			if (!B) {
 				// CP15_reg1_Ubit stuff omitted
-				data = mem->get_u32(address);
+				data = get_u32(address);
 				if (Rd == 15) {
 					r[15] = data & 0xFFFFFFFE;
 					set_t_bit(data & 0x1);
@@ -1808,18 +1866,18 @@ BOOL Processor::arm_load_store(DWORD instr) {
 			}
 			else {
 				if (Rd == 15) throw "UNPREDICTABLE";
-				r[Rd] = mem->get_u8(address);
+				r[Rd] = get_u8(address);
 			}
 			if (Rd == 15) r[Rd] -= 4;
 		}
 		else {
 			if (!B) {
-				mem->set_u32(address, (Rd == 15) ? r[Rd] + 8 : r[Rd]);
+				set_u32(address, (Rd == 15) ? r[Rd] + 8 : r[Rd]);
 				// omitted shared stuff
 			}
 			else {
 				if (Rd == 15) throw "UNPREDICTABLE";
-				mem->set_u8(address, r[Rd] & 0xFF);
+				set_u8(address, r[Rd] & 0xFF);
 			}
 		}
 
@@ -1847,7 +1905,7 @@ BOOL Processor::arm_load_store_multiple(DWORD instr) {
 			DWORD address = start_end_addresses.first;
 			for (int i = 0; i < 16; i++) {
 				if ((register_list >> i) & 0x1) {
-					mem->set_u32(address, r[i] + ((i == 15) ? 8 : 0));
+					set_u32(address, r[i] + ((i == 15) ? 8 : 0));
 					address += 4;
 					//if Shared(address) then /* from ARMv6 */
 					//	physical_address = TLB(address)
@@ -1866,12 +1924,12 @@ BOOL Processor::arm_load_store_multiple(DWORD instr) {
 			DWORD address = start_end_addresses.first;
 			for (int i = 0; i < 15; i++) {
 				if ((register_list >> i) & 0x1) {
-					r[i] = mem->get_u32(address);
+					r[i] = get_u32(address);
 					address += 4;
 				}
 			}
 			if ((register_list >> 15) & 0x1) {
-				DWORD value = mem->get_u32(address);
+				DWORD value = get_u32(address);
 				//if (architecture version 5 or above) then
 				r[15] = (value & 0xFFFFFFFE) - 4;
 				set_t_bit(value & 0x1);
@@ -1915,7 +1973,7 @@ BOOL Processor::arm_coprocessor_register_transfers(DWORD instr) {
 
 	if (L) {
 		if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 1 && CRm == 0) {
-			std::cout << "TODO: read from control register (c1)." << std::endl;
+			r[Rd] = cp15_c1;
 		}
 		else return false;
 	}
@@ -1933,7 +1991,7 @@ BOOL Processor::arm_coprocessor_register_transfers(DWORD instr) {
 			std::cout << "Writing domain access permissions: 0x" << std::hex << r[Rd] << std::dec << std::endl;
 		}
 		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 2 && CRm == 0) {
-			std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to TTBR." << std::endl;
+			ttbr = r[Rd];
 		}
 		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 6 && CRm == 0) {
 			//std::cout << "Writing 0x" << std::hex << r[Rd] << std::dec << " to FAR." << std::endl;
@@ -1951,7 +2009,7 @@ BOOL Processor::arm_coprocessor_register_transfers(DWORD instr) {
 			//std::cout << "Drain write buffer." << std::endl;
 		}
 		else if (cp_num == 15 && opcode_1 == 0 && opcode_2 == 0 && CRn == 1 && CRm == 0) {
-			std::cout << "TODO: write to control register: 0x" << std::hex << r[Rd] << std::dec << std::endl;
+			cp15_c1 = r[Rd];
 		}
 		else return false;
 	}

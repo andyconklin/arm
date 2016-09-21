@@ -26,8 +26,19 @@ public:
 
 class Processor {
 	Registers r;
+	DWORD ttbr = 0;
 	DWORD cp15 = 0xDEADC0DE;
+	DWORD cp15_c1 = 0x5E0F8;
+	DWORD dacr = 0xFFFFFFFF;
 	PhysicalMemory *mem;
+
+	DWORD translate(DWORD vaddr);
+	DWORD get_u32(DWORD vaddr);
+	void set_u32(DWORD vaddr, DWORD val);
+	WORD get_u16(DWORD vaddr);
+	void set_u16(DWORD vaddr, WORD val);
+	BYTE get_u8(DWORD vaddr);
+	void set_u8(DWORD vaddr, BYTE val);
 
 	BOOL InAPrivilegedMode();
 	BOOL CurrentModeHasSPSR();
