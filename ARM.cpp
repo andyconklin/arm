@@ -6,15 +6,15 @@
 #include "Processor.h"
 #include "AES.h"
 #include "SHA.h"
+#include "GPIO.h"
 
 int main()
 {
 	PhysicalMemory mem;
 
+	/* Load each segment of an elf file into memory */
 	ELFIO::elfio reader;
 	reader.load("C:\\Users\\Andy\\Desktop\\fw.img.dec");
-
-	// Print ELF file segments info
 	ELFIO::Elf_Half seg_num = reader.segments.size();
 	for (int i = seg_num-1; i >= 0; --i) {
 		const ELFIO::segment* pseg = reader.segments[i];
@@ -31,7 +31,7 @@ int main()
 	mem.set_u32(0x08130D30, 0xE12FFF1E);
 
 	mem.add_segment(0x0D010000, 0x34); // NAND
-	mem.add_segment(0x0D800000, 0x0D806880 - 0x0D800000); // GPIO
+	mem.add_segment(new GpioSegment(0x0D800000));
 	mem.add_segment(0x0D8B0000, 0x0D8B46A0 - 0x0D8B0000); // DRAMctrl
 
 	/*mem.add_segment(new AesSegment(0x0D020000));

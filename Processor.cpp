@@ -52,6 +52,7 @@ namespace {
 
 /* r[16] = cpsr and r[17] = spsr */
 DWORD& Registers::operator[](DWORD index) {
+	if (index & 0x100) return r[index & ~0x100]; /* force user registers */
 	if (index > 17) throw "non-existent register";
 	if (index == 15) return r[15];
 	if (index == 16) return cpsr;
@@ -522,7 +523,7 @@ DWORD Processor::addressing_mode_3(DWORD instr) {
 			r[Rn] = address;
 		return address;
 	}
-	else if (!P && I && W) {
+	else if (!P && I && !W) {
 		DWORD address = Rnadj;
 		DWORD offset_8 = (immedH << 4) | immedL;
 		if (ConditionPassed(cond))
@@ -1735,6 +1736,27 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			}
 		}
 	}
+	else if (!P && U && I && !W && !S && !H) { /* SMULL */
+		DWORD S = (instr >> 20) & 0x1;
+		DWORD RdHi = (instr >> 16) & 0xF;
+		DWORD RdLo = (instr >> 12) & 0xF;
+		DWORD Rs = (instr >> 8) & 0xF;
+		DWORD Rm = instr & 0xF;
+
+		if (RdHi == 15 || RdLo == 15 || Rm == 15 || Rs == 15)
+			throw "UNPREDICTABLE";
+
+		if (ConditionPassed(cond)) {
+			signed __int64 p = ((signed __int64)(r[Rm]) * (signed __int64)(r[Rs]));
+			r[RdHi] = (p >> 32) & 0xFFFFFFFF; /* Signed multiplication */
+			r[RdLo] = (p & 0xFFFFFFFF);
+			if (S) {
+				set_n_flag(r[RdHi] & 0x80000000);
+				set_z_flag(r[RdHi] == 0 && r[RdLo] == 0);
+				/* C and V unaffected */
+			}
+		}
+	}
 	else if (!P && U && !I && !W && !S && !H) { /* UMULL  */
 		DWORD S = (instr >> 20) & 0x1;
 		DWORD RdHi = (instr >> 16) & 0xF;
@@ -1764,7 +1786,7 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			//	else
 			//		Memory[address, 2] = UNPREDICTABLE
 			//else /* CP15_reg1_Ubit ==1 */
-			set_u16(address, r[Rd] & 0xFF);
+			set_u16(address, r[Rd] & 0xFFFF);
 			//if Shared(address) then /* ARMv6 */
 			//	physical_address = TLB(address)
 			//	ClearExclusiveByAddress(physical_address, processor_id, 2)
@@ -1782,7 +1804,24 @@ BOOL Processor::arm_multiplies_extra_load_stores(DWORD instr) {
 			r[Rd] = get_u16(address);
 		}
 	}
+	else if (L && S && H) { /* LDRSH */
+		if (ConditionPassed(cond)) {
+			//if (CP15_reg1_Ubit == 0) then
+			//	if address[0] == 0 then
+			//		data = Memory[address, 2]
+			//	else
+			//		data = UNPREDICTABLE
+			//else /* CP15_reg1_Ubit == 1 */
+			WORD data = get_u16(address);
+			if (data & 0x8000)
+				data |= 0xFFFF8000;
+			r[Rd] = data;
+		}
+	}
 	else return false;
+	if (ConditionPassed(cond) && L && Rd == 15) {
+		r[Rd] -= 4;
+	}
 	return true;
 }
 BOOL Processor::arm_undefined_instruction(DWORD) { return false; }
@@ -1937,6 +1976,40 @@ BOOL Processor::arm_load_store_multiple(DWORD instr) {
 				//	pc = value AND 0xFFFFFFFC
 				address += 4;
 			}
+			if (start_end_addresses.second != address - 4)
+				throw "a fit";
+		}
+	}
+	else if (S && !W && L && !((instr >> 15) & 0x1)) {
+		/* LDM (2) */
+		//MemoryAccess(B - bit, E - bit)
+		if (ConditionPassed(cond)) {
+			DWORD address = start_end_addresses.first;
+			for (int i = 0; i < 15; i++) {
+				if ((register_list >> i) & 0x1) {
+					r[i | 0x100] = get_u32(address);
+					address += 4;
+				}
+			}
+			if (start_end_addresses.second != address - 4)
+				throw "a fit";
+		}
+	}
+	else if (S && L && ((instr >> 15) & 0x1)) {
+		/* LDM (3) */
+		//MemoryAccess(B - bit, E - bit)
+		if (ConditionPassed(cond)) {
+			DWORD address = start_end_addresses.first;
+			for (int i = 0; i < 15; i++) {
+				if ((register_list >> i) & 0x1) {
+					r[i] = get_u32(address);
+					address += 4;
+				}
+			}
+			if (CurrentModeHasSPSR()) CPSR = SPSR;
+			else throw "UNPREDICTABLE";
+			r[15] = get_u32(address) - 4;
+			address += 4;
 			if (start_end_addresses.second != address - 4)
 				throw "a fit";
 		}
